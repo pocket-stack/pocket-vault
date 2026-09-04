@@ -26,7 +26,7 @@ const shot = (panel: Panel, name: string): void => {
   await deck.frames(6);
   shot(deck, "deck-files");
 
-  await deck.tap(160, 60); // the search box
+  await deck.tap(160, 76); // the search box
   await deck.frames(2);
   for (const ch of "taffy") {
     deck.store.setQuery(deck.store.query() + ch);
@@ -38,7 +38,7 @@ const shot = (panel: Panel, name: string): void => {
   deck.store.setQuery("");
   await deck.frames(4);
 
-  await deck.tap(120, 88); // first note in the list
+  await deck.tap(120, 106); // first note in the list
   await deck.frames(8);
   deck.store.setMode("read");
   await deck.frames(8);
@@ -48,13 +48,19 @@ const shot = (panel: Panel, name: string): void => {
   await deck.frames(20);
   shot(deck, "deck-read-flung");
 
-  await deck.tap(200, 36); // the Outline tab
+  await deck.tap(205, 47); // the Outline segment
   await deck.frames(8);
   shot(deck, "deck-outline");
 
-  await deck.tap(280, 36); // the Edit tab
+  await deck.tap(285, 47); // the Edit segment
   await deck.frames(8);
   shot(deck, "deck-edit");
+  await deck.tap(283, 181); // Select
+  await deck.frames(4);
+  shot(deck, "deck-edit-select");
+  await deck.tap(295, 16); // Info
+  await deck.frames(4);
+  shot(deck, "deck-sheet");
   deck.close();
 }
 
@@ -81,11 +87,16 @@ const shot = (panel: Panel, name: string): void => {
   stage.store.enterEdit();
   await stage.frames(6);
   for (const ch of "Hello from the 3DS. ") {
-    stage.store.type(ch);
+    stage.store.insert(ch);
     await stage.frames(2);
   }
   await stage.frames(6);
   shot(stage, "stage-edit");
+  stage.store.setSelecting(true);
+  for (let i = 0; i < 12; i++) stage.store.moveCaret(-1, 0);
+  await stage.frames(4);
+  shot(stage, "stage-select");
+  stage.store.setSelecting(false);
   stage.store.leaveEdit();
   await stage.frames(6);
   stage.close();

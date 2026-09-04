@@ -159,16 +159,23 @@ export interface FocusParams {
   line: number | null;
 }
 
+/** A position in the source: line index and UTF-16 column. Columns are
+ *  clamped to the line by the companion, so END_OF_LINE names a line's end
+ *  without knowing its length. */
+export type Pos = [line: number, col: number];
+export const END_OF_LINE = 1 << 20;
+
 export interface EditParams {
   id: number;
-  line: number;
-  /** Source column the edit happens at. */
-  col: number;
-  /** Text to insert at col ("\n" splits the line). */
-  insert?: string;
-  /** Characters to delete BEFORE col (a backspace); at col 0 joins with the
-   *  previous line. */
-  del?: number;
+  /** Per-guest-session edit counter. A re-sent edit (the link dropped after
+   *  the companion applied it) is answered with the same patch again and not
+   *  applied twice. */
+  seq: number;
+  /** Replace [from, to) with `text`. from === to inserts; text "" deletes;
+   *  "\n" in text splits; a range across lines joins. */
+  from: Pos;
+  to: Pos;
+  text: string;
 }
 
 /** One replaced range of visual rows. */
@@ -194,6 +201,11 @@ export interface Patch {
   map: string;
   /** Caret after the edit: source line and column. */
   caret: [line: number, col: number];
+  /** The active (raw) line's source text, when one is active. The guest owns
+   *  this line while editing and checks its local copy against it. */
+  text?: string;
+  /** Echo of EditParams.seq for edit patches. */
+  seq?: number;
   /** Set when the whole document was laid out again; the guest drops every
    *  cached row and re-reads DocInfo from here. */
   full?: DocInfo;

@@ -14,6 +14,7 @@ import { createRoot } from "solid-js";
 import { createSimCompanionPair, type SimCompanionPair } from "../vendor/pocketjs/hosts/sim/companion.ts";
 import { K_RAW, ROW_H, rowTops } from "../app/protocol.ts";
 import { createVaultStore, type VaultStore } from "../app/store.ts";
+import { setRawMeasurer } from "../app/wrap.ts";
 import { createVaultService } from "../host/serve.ts";
 
 let dir = "";
@@ -28,6 +29,9 @@ beforeAll(() => {
   dir = mkdtempSync(join(tmpdir(), "pocket-vault-"));
   for (let n = 1; n <= 12; n++) writeFileSync(join(dir, `note-${n}.md`), NOTE(n));
   service = createVaultService({ vault: dir, memory: true, log: () => {} });
+  // No host in a headless test: the guest's raw wrap measures with the
+  // companion's Metrics, the same Inter advances the atlas was baked from.
+  setRawMeasurer((text) => service.metrics.width(text, "regular", 14));
 });
 
 afterAll(() => {
@@ -87,22 +91,34 @@ describe("Pocket Vault guest ↔ companion", () => {
       expect(store.mode()).toBe("edit");
       const caret = store.caret()!;
       expect(caret.col).toBe(0);
-      const raw = store.activeLineText();
       const before = readFileSync(join(dir, "note-3.md"), "utf8").split("\n")[caret.line];
-      expect(raw).toBe(before);
+      expect(store.activeText()).toBe(before);
 
-      store.type("Q");
-      store.type("Z");
-      await frames(store, pair, 2);
+      // Local first: the text and the caret move on the keystroke, before
+      // any reply; the companion confirms afterwards.
+      store.insert("Q");
+      store.insert("Z");
+      expect(store.activeText()).toBe(`QZ${before}`);
       expect(store.caret()).toEqual({ line: caret.line, col: 2 });
-      expect(store.activeLineText()).toBe(`QZ${before}`);
+      expect(store.unconfirmed()).toBeGreaterThan(0);
+      const rawRows = () => {
+        const out: string[] = [];
+        for (let i = 0; i < store.doc()!.rows; i++) {
+          const row = store.rowAt(i);
+          if (row && row.l === caret.line && row.k === K_RAW) out.push(row.r.map((run) => run[1]).join(""));
+        }
+        return out.join("");
+      };
+      expect(rawRows().startsWith("QZ")).toBe(true);
+      await frames(store, pair, 3);
+      expect(store.unconfirmed()).toBe(0);
+      expect(store.activeText()).toBe(`QZ${before}`);
       store.backspace();
-      await frames(store, pair, 2);
-      expect(store.activeLineText()).toBe(`Q${before}`);
+      await frames(store, pair, 3);
+      expect(store.activeText()).toBe(`Q${before}`);
       expect(store.doc()!.rev).toBeGreaterThan(doc.rev);
 
-      // The raw row is one of the cached rows and every row height still
-      // matches the kinds string the patches spliced.
+      // Every row height still matches the kinds string the patches spliced.
       const kinds = store.doc()!.kinds;
       let sawRaw = false;
       for (let i = 0; i < kinds.length; i++) {
@@ -113,12 +129,45 @@ describe("Pocket Vault guest ↔ companion", () => {
       }
       expect(sawRaw).toBe(true);
 
+      // Offline: keystrokes keep landing locally; on reconnect the queue
+      // drains once and the file agrees.
+      pair.disconnect();
+      await frames(store, pair, 2);
+      expect(store.mac.status()).toBe("searching");
+      store.insert("!");
+      store.insert("!");
+      expect(store.activeText()).toBe(`Q!!${before}`);
+      await frames(store, pair, 2);
+      expect(store.activeText()).toBe(`Q!!${before}`);
+      pair.connect();
+      await frames(store, pair, 4);
+      expect(store.mac.status()).toBe("linked");
+      expect(store.unconfirmed()).toBe(0);
+
+      // A structural edit waits for its patch; a keystroke typed meanwhile
+      // is replayed after it.
+      store.insert("\n");
+      store.insert("R");
+      await frames(store, pair, 4);
+      expect(store.caret()).toEqual({ line: caret.line + 1, col: 1 });
+      expect(store.activeText()).toBe(`R${before}`);
+
+      // Select back over the R with the anchor and delete it.
+      store.setSelecting(true);
+      store.moveCaret(-1, 0);
+      expect(store.selection()).toEqual({ anchor: { line: caret.line + 1, col: 1 }, head: { line: caret.line + 1, col: 0 } });
+      store.backspace();
+      expect(store.activeText()).toBe(before);
+      store.setSelecting(false);
+      await frames(store, pair, 3);
+
       store.leaveEdit();
       await frames(store, pair, 2);
       expect(store.mode()).toBe("read");
       service.flush();
-      const after = readFileSync(join(dir, "note-3.md"), "utf8").split("\n")[caret.line];
-      expect(after).toBe(`Q${before}`);
+      const lines = readFileSync(join(dir, "note-3.md"), "utf8").split("\n");
+      expect(lines[caret.line]).toBe("Q!!");
+      expect(lines[caret.line + 1]).toBe(before);
       dispose();
     });
   });

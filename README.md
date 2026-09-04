@@ -10,17 +10,18 @@ the console's requests as JSON lines the guest reads on later frames.
 
 <p>
   <img src="media/stage-doc.png" width="400" alt="A note on the top screen: front matter, heading, wrapped body">
-  <img src="media/deck-files.png" width="320" alt="The bottom screen: the vault's notes, a search box, the tabs">
+  <img src="media/deck-files.png" width="320" alt="The bottom screen: the vault's notes, a search field, the segmented control">
 </p>
 
 | | |
 |---|---|
 | <img src="media/stage-fling.png" width="400" alt="Mid-fling: rows already there where the fling lands"> | <img src="media/deck-read.png" width="320" alt="Read mode: a minimap of the whole note and a trackpad"> |
-| <img src="media/stage-edit.png" width="400" alt="Edit mode: the active line raw, a caret after the typed text"> | <img src="media/deck-edit.png" width="320" alt="Edit mode: the keyboard, the raw line echoed above it"> |
+| <img src="media/stage-select.png" width="400" alt="Edit mode: the active line raw, a selection and the caret"> | <img src="media/deck-edit-select.png" width="320" alt="Edit mode: a short keyboard over a caret pad, Select on"> |
+| <img src="media/stage-edit.png" width="400" alt="Typing lands on the frame it is typed"> | <img src="media/deck-sheet.png" width="320" alt="The Info sheet: companion, link, notes, open note, last error"> |
 
 <p>
   <img src="media/stage-fling.gif" width="400" alt="A fling on the top screen: rows are already there where it lands">
-  <img src="media/deck-tour.gif" width="320" alt="The deck: list, trackpad, minimap scrub, outline, keyboard">
+  <img src="media/deck-tour.gif" width="320" alt="The deck: list, trackpad, minimap scrub, outline, keyboard, select">
 </p>
 
 Every image above is rendered by `bun run shots` / `bun run films` in
@@ -65,40 +66,53 @@ under where a fling is heading a quarter second later, so rows are there
 when it lands. A page request stays in flight while its page is wanted and
 is cancelled the moment it is not.
 
-**Bottom screen (320×240)** — the deck, borrowing two ideas from other
-PocketJS companions. From Pocket Shell's 3DS app: a strip of tabs that
-follows the state of the top screen, and a **minimap** of the whole note
-(96 density buckets computed by the companion) with the viewport drawn on
-it — tap or drag to jump. From the iPod deck: a **trackpad** whose pan
-scrolls the screen above it with the finger's velocity carried into the
-fling. In edit mode the deck is a keyboard; the echo strip above the keys
-shows the source line under the caret, raw.
+**Bottom screen (320×240)** — the deck, in the Aqua / iOS 6 register the
+console's LCD shows well (`app/theme.ts` holds every colour and control
+shape as class-string tokens). It borrows two ideas from other PocketJS
+companions. From Pocket Shell's 3DS app: a segmented control that follows
+the state of the top screen, and a **minimap** of the whole note (96 density
+buckets computed by the companion) with the viewport drawn on it — tap or
+drag to jump. From the iPod deck: a **trackpad** whose pan scrolls the
+screen above it with the finger's velocity carried into the fling. In edit
+mode the deck is a four-row keyboard over a **caret pad**: a pan moves the
+caret by character and row; the **Select** toggle beside it turns the same
+pan (and the d-pad) into a drag-select. **Info** in the navigation bar opens
+a sheet with the companion's name, the link state, the note count, the open
+note's size and the last error.
 
 | Input | Files / Search | Read | Outline | Edit |
 |---|---|---|---|---|
 | tap list row | open the note | | jump to heading | |
-| tap search box | keyboard | | | |
+| tap search field | keyboard | | | |
 | trackpad pan | | scroll (fling on release) | | |
 | trackpad hold | | edit here | | |
 | minimap tap/drag | | jump | | |
+| caret pad pan | | | | move the caret (Select on: extend the selection) |
 | d-pad ↑↓ | list | scroll | scroll | caret row |
 | d-pad ←→ | | | | caret column |
 | L / R | | page up / down | | |
 | A | open selected | | | |
 | B | | back to Files | back to Read | done |
-| X | | edit | | |
+| X | | edit | | toggle Select |
 | Y | | outline | back | |
 | START | | save | | save |
 
-**Editing** follows Obsidian's live preview: the line under the caret is
-shown as its raw markdown, everything else rendered. Moving the caret onto
-another line asks the companion to swap which line is raw (`doc.focus`); a
-keystroke is `doc.edit {line, col, insert | del}` and comes back as the row
-spans that changed, spliced into the kinds string and the row cache in
-place. Enter splits a line, backspace at column 0 joins it with the one
-above. The companion writes the file 400 ms after the last edit and on
-START; the folder is watched, so a change made in Obsidian on the Mac bumps
-the index version and the list re-queries.
+**Editing is local first.** The guest owns the line under the caret: it
+holds that line's raw text, applies a keystroke to it and re-breaks it on
+the same frame with the companion's own wrapping rules over the atlas's own
+advances (`app/wrap.ts`), then queues the edit. One edit is in flight at a
+time and queued keystrokes coalesce into it, so a burst of typing is one
+request; the companion's patch confirms rows the guest already shows and
+moves everything else. Offline, the line keeps accepting keystrokes and the
+queue drains on reconnect; a per-session sequence number makes a re-sent
+edit idempotent. An edit that changes the line structure — return,
+backspace at column 0, a selection across lines — waits for its patch, and
+keystrokes typed meanwhile are replayed after it. The active line is shown
+as raw markdown (Obsidian's live preview); moving onto another line swaps
+which line is raw (`doc.focus`), once the queue has drained. The companion
+writes the file 400 ms after the last edit and on START or Save; the folder
+is watched, so a change made in Obsidian on the Mac bumps the index version
+and the list re-queries.
 
 ## The companion
 
@@ -110,8 +124,8 @@ the index version and the list re-queries.
 | `doc.open {id}` | `{rows, lines, kinds, map, rev, title}` — one kind digit per row, 96 density digits |
 | `doc.rows {id, from, count, rev}` | rows `{k, l, s, r: [[x, text, style]…]}` for that revision |
 | `doc.outline {id}` | `[{row, level, text}]` |
-| `doc.focus {id, line}` | a patch: spans of replaced rows, new total, new map, caret |
-| `doc.edit {id, line, col, insert?, del?}` | a patch |
+| `doc.focus {id, line}` | a patch: spans of replaced rows, new total, new map, caret, the raw line's text |
+| `doc.edit {id, seq, from: [line, col], to: [line, col], text}` | a patch; `seq` repeats are answered from cache, not applied twice |
 | `doc.save {id}` | `{saved}` |
 
 Event `vault.changed {version}` follows a change on disk. The index lives in

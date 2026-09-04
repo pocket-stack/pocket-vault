@@ -43,6 +43,17 @@ needs the console back at the Homebrew Launcher.
 - **Every source line is one block, and the active line is raw.** That is
   what makes a caret (line, col) and lets an edit come back as a span. Do
   not merge lines into paragraphs on the companion; Obsidian does not.
+- **The guest owns the active line.** Keystrokes apply to `localText` and
+  re-wrap locally (`app/wrap.ts` must stay a mirror of the companion's raw
+  wrap in `host/layout.ts`); the companion's patch is confirmation. A
+  structural edit (newline, join, cross-line selection) blocks and defers
+  keystrokes until its patch. Never focus another line while edits are
+  queued — the queued edits refer to the line the companion has active.
+- **Edit sequence numbers are per GUEST session**, the number in the hello,
+  not the transport session: a reconnect re-sends the in-flight edit over a
+  new connection and the companion must recognise it.
+- **Every colour and control shape is a token in `app/theme.ts`.** Add a
+  token, do not write a hex literal in a component.
 - **Rows are fetched by page, and a page stays in flight while wanted.** A
   single "latest window" query starved during a fling: every page boundary
   crossed cancelled the request. Pages under the viewport now and under
@@ -63,6 +74,8 @@ needs the console back at the Homebrew Launcher.
 - **A raw row keeps its trailing spaces.** The wrapper trims trailing
   whitespace on every row but the raw one, where each source character is a
   caret position.
+- **Headless tests need a measurer.** `setRawMeasurer` in `app/wrap.ts`
+  takes the companion's Metrics when there is no host to measure with.
 - **The runtime on the card may predate the svc wire.** "no svc mailbox on
   this host" in the status strip means `ui.svcOpen` is missing; `bun run
   probe --host <ip> -- --eval 'typeof ui.svcOpen'` confirms it, and only a

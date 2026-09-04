@@ -50,6 +50,7 @@ import {
   type DocInfo,
   type OutlineItem,
   type Patch,
+  type Pos,
   type Row,
   type Run,
   type Span,
@@ -600,9 +601,10 @@ function relayoutRanges(metrics: Metrics, doc: Laid, ranges: Range[]): Span[] | 
 
 function finish(doc: Laid, spans: Span[] | null, caret: [number, number], title: string): Patch {
   doc.rev += 1;
-  const base = { rev: doc.rev, total: doc.rows.length, map: densityMap(doc.rows), caret };
-  if (spans === null) return { ...base, spans: [], full: docInfo(doc, title) };
-  return { ...base, spans };
+  const base: Patch = { rev: doc.rev, spans: spans ?? [], total: doc.rows.length, map: densityMap(doc.rows), caret };
+  if (doc.active !== null && doc.active < doc.lines.length) base.text = doc.lines[doc.active]!;
+  if (spans === null) base.full = docInfo(doc, title);
+  return base;
 }
 
 /** Show `line` raw (or none). Two lines change at most: the one leaving
@@ -619,59 +621,40 @@ export function focusLine(metrics: Metrics, doc: Laid, line: number | null, titl
   return finish(doc, spans, [next ?? 0, 0], title);
 }
 
-/** Insert and/or delete at (line, col). The caret's line becomes the active
- *  (raw) line; a split makes the new line active. */
-export function editAt(
-  metrics: Metrics,
-  doc: Laid,
-  line: number,
-  col: number,
-  insert: string | undefined,
-  del: number | undefined,
-  title: string,
-): Patch {
-  line = Math.max(0, Math.min(doc.lines.length - 1, line));
-  let text = doc.lines[line]!;
-  col = Math.max(0, Math.min(text.length, col));
-  let from = line;
-  let oldCount = 1;
-  if (del && del > 0) {
-    if (col >= del) {
-      text = text.slice(0, col - del) + text.slice(col);
-      col -= del;
-      doc.lines[line] = text;
-    } else if (line > 0) {
-      const previous = doc.lines[line - 1]!;
-      doc.lines.splice(line - 1, 2, previous + text.slice(col));
-      from = line - 1;
-      oldCount = 2;
-      line -= 1;
-      col = previous.length;
-      text = doc.lines[line]!;
-    } else {
-      text = text.slice(col);
-      col = 0;
-      doc.lines[line] = text;
-    }
+const clampPos = (doc: Laid, pos: Pos): [number, number] => {
+  const line = Math.max(0, Math.min(doc.lines.length - 1, pos[0]));
+  const col = Math.max(0, Math.min(doc.lines[line]!.length, pos[1]));
+  return [line, col];
+};
+
+/**
+ * Replace the source range [from, to) with `text` — an insert when the two
+ * coincide, a delete when the text is empty, a split when it holds a
+ * newline, a join when the range spans lines. The caret lands at the end of
+ * the inserted text and its line becomes the active (raw) one.
+ */
+export function replaceRange(metrics: Metrics, doc: Laid, from: Pos, to: Pos, text: string, title: string): Patch {
+  let [l0, c0] = clampPos(doc, from);
+  let [l1, c1] = clampPos(doc, to);
+  if (l1 < l0 || (l1 === l0 && c1 < c0)) {
+    [l0, c0, l1, c1] = [l1, c1, l0, c0];
   }
-  let newCount = 1;
-  if (insert && insert.length > 0) {
-    const joined = text.slice(0, col) + insert + text.slice(col);
-    const parts = joined.split("\n");
-    doc.lines.splice(line, 1, ...parts);
-    newCount = parts.length;
-    line += parts.length - 1;
-    col = parts[parts.length - 1]!.length - (text.length - col);
-  }
+  const head = doc.lines[l0]!.slice(0, c0);
+  const tail = doc.lines[l1]!.slice(c1);
+  const parts = (head + text + tail).split("\n");
+  const oldCount = l1 - l0 + 1;
+  doc.lines.splice(l0, oldCount, ...parts);
+  const caretLine = l0 + parts.length - 1;
+  const caretCol = parts[parts.length - 1]!.length - tail.length;
   const previousActive = doc.active;
-  doc.active = line;
+  doc.active = caretLine;
   doc.dirty = true;
-  const ranges: Range[] = [{ from, count: newCount, oldFrom: from, oldCount }];
-  if (previousActive !== null && (previousActive < from || previousActive >= from + oldCount)) {
-    const shifted = previousActive >= from + oldCount ? previousActive + newCount - oldCount : previousActive;
+  const ranges: Range[] = [{ from: l0, count: parts.length, oldFrom: l0, oldCount }];
+  if (previousActive !== null && (previousActive < l0 || previousActive > l1)) {
+    const shifted = previousActive > l1 ? previousActive + parts.length - oldCount : previousActive;
     if (shifted < doc.lines.length) ranges.push({ from: shifted, count: 1, oldFrom: previousActive, oldCount: 1 });
   }
   const spans = relayoutRanges(metrics, doc, ranges);
   if (spans === null) relayoutAll(metrics, doc);
-  return finish(doc, spans, [line, col], title);
+  return finish(doc, spans, [caretLine, caretCol], title);
 }

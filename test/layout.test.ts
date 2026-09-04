@@ -17,6 +17,7 @@ import {
   K_QUOTE,
   K_RAW,
   KIND_CHARS,
+  END_OF_LINE,
   ROW_PX,
   S_BOLD,
   S_CODE,
@@ -26,7 +27,7 @@ import {
   type Patch,
   type Row,
 } from "../app/protocol.ts";
-import { classify, editAt, focusLine, inline, kindsOf, layoutDoc, Metrics, outline, type Face } from "../host/layout.ts";
+import { classify, focusLine, inline, kindsOf, layoutDoc, Metrics, outline, replaceRange, type Face } from "../host/layout.ts";
 
 const metrics = new Metrics();
 
@@ -153,41 +154,38 @@ describe("edits", () => {
   test("insert, delete, split and join patch the row string the way a fresh layout would", () => {
     const doc = layoutDoc(metrics, 1, "wire.md", SOURCE);
     let shadow = kindsOf(doc.rows);
-    const steps: Array<[line: number, col: number, insert?: string, del?: number]> = [
-      [6, 4, "really "],
-      [6, 0, "**"],
-      [7, 2, undefined, 2], // eats "- " → a paragraph, not a list item
-      [8, 14, "\n"], // splits the second item
-      [9, 0, undefined, 1], // joins it back
-      [4, 12, " and more"],
+    const steps: Array<[from: [number, number], to: [number, number], text: string]> = [
+      [[6, 4], [6, 4], "really "], // insert
+      [[6, 0], [6, 0], "**"],
+      [[7, 0], [7, 2], ""], // eats "- " → a paragraph, not a list item
+      [[8, 14], [8, 14], "\n"], // splits the second item
+      [[8, END_OF_LINE], [9, 0], ""], // joins it back (backspace at column 0)
+      [[4, 12], [4, 12], " and more"],
+      [[6, 2], [8, 3], "X"], // a selection across lines replaced by one letter
     ];
     let caret: [number, number] = [0, 0];
-    for (const [line, col, insert, del] of steps) {
-      const patch = editAt(metrics, doc, line, col, insert, del, "t");
+    for (const [from, to, text] of steps) {
+      const patch = replaceRange(metrics, doc, from, to, text, "t");
       if (patch.full) shadow = patch.full.kinds;
       else shadow = applySpans(shadow, patch);
       caret = patch.caret;
       expect(shadow).toBe(kindsOf(doc.rows));
+      expect(patch.text).toBe(doc.lines[caret[0]]);
       const fresh = layoutDoc(metrics, 1, "wire.md", doc.lines.join("\n") + "\n");
-      fresh.active = doc.active;
-      // Same source, same active line → same kinds, once the fresh copy
-      // shows the same line raw.
-      const refocused = focusLine(metrics, fresh, doc.active, "t");
-      void refocused;
+      focusLine(metrics, fresh, doc.active, "t");
       expect(kindsOf(fresh.rows)).toBe(kindsOf(doc.rows));
       expect(patch.total).toBe(doc.rows.length);
       expect(patch.map.length).toBe(96);
       for (const row of doc.rows) expect(rowEnd(row)).toBeLessThanOrEqual(DOC_W);
     }
-    expect(caret).toEqual([4, 21]);
+    expect(caret).toEqual([6, 3]);
     expect(doc.lines[4]).toBe("# Wire notes and more");
-    expect(doc.lines[7]).toBe("first item");
-    expect(doc.lines[8]).toBe("- second item with **bold**");
+    expect(doc.lines[6]!.startsWith("**Xecond item with")).toBe(true);
   });
 
   test("a fence typed mid-document forces a whole re-layout", () => {
     const doc = layoutDoc(metrics, 1, "wire.md", SOURCE);
-    const patch = editAt(metrics, doc, 6, 0, "```\n", undefined, "t");
+    const patch = replaceRange(metrics, doc, [6, 0], [6, 0], "```\n", "t");
     expect(patch.full).toBeDefined();
     expect(patch.full!.kinds).toBe(kindsOf(doc.rows));
     expect(KIND_CHARS.indexOf(patch.full!.kinds[doc.lineRow0[8]!]!)).toBe(K_CODE);

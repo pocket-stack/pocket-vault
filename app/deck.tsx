@@ -1,17 +1,21 @@
 // app/deck.tsx — the bottom screen: every control, none of the content.
 //
 // The top screen cannot be touched, so the deck lends it the iPod deck's
-// trick — a trackpad that scrolls what is above it — and Pocket Shell's:
-// a minimap of the whole note to jump by, and a strip of tabs that changes
-// with the state of the top screen. In edit mode the deck is the keyboard;
-// the d-pad moves the caret, and the echo strip shows the raw line under it.
+// trick — a trackpad that drives what is above it — and Pocket Shell's: a
+// minimap of the whole note to jump by, and a segmented control that
+// follows the state of the top screen. In edit mode the deck is a short
+// keyboard over a trackpad: a pan on the pad moves the caret by character
+// and row, a Select toggle beside it turns the same pan into a drag-select,
+// and the d-pad does the same with buttons.
 //
-// Three recognizers, each with a rect that follows the mode so no two ever
-// see the same contact: taps for the tabs, the search box and the keys;
-// pans for the trackpad; pans for the minimap. The file and outline lists
-// are VirtualLists with their own recognizers inside their own rects.
+// Recognizers each have a rect that follows the mode so no two ever see the
+// same contact: taps for the nav bar, the segments, the field and the keys;
+// pans for the read-mode trackpad; pans for the minimap; pans for the caret
+// pad. The file and outline lists are VirtualLists with their own
+// recognizers inside their own rects. Colours and control shapes come from
+// app/theme.ts.
 
-import { createMemo, createSignal, For, Show } from "solid-js";
+import { createMemo, For, Show } from "solid-js";
 import { Text, View } from "@pocketjs/framework/components";
 import { createGesture } from "@pocketjs/framework/gesture";
 import { createScroller } from "@pocketjs/framework/kinetics";
@@ -19,29 +23,44 @@ import { onFrame } from "@pocketjs/framework/lifecycle";
 import { VirtualList } from "@pocketjs/framework/virtual-list";
 import type { SurfaceId } from "@pocketjs/framework/display";
 import { DECK_H, DECK_W, KIND_CHARS, MAP_BUCKETS, STAGE_H, type OutlineItem } from "./protocol.ts";
-import { createKeyPress, Keyboard, keyboardHit, type KeyAction } from "./keyboard.tsx";
+import { createKeyPress, KB_BOTTOM, Keyboard, keyboardHit, type KeyAction } from "./keyboard.tsx";
 import type { Mode, VaultStore } from "./store.ts";
+import * as T from "./theme.ts";
 
 /** The deck lives on the auxiliary (touch) screen; the sim harness, which
  *  hosts one surface at a time, mounts it on the primary one instead. */
-const SURFACE: SurfaceId = ((globalThis as { __vaultDeckSurface?: SurfaceId }).__vaultDeckSurface ?? "auxiliary");
-const STATUS_H = 24;
-const TABS_Y = 24;
-const TABS_H = 24;
-const CONTENT_Y = TABS_Y + TABS_H; // 48
-const CONTENT_H = DECK_H - CONTENT_Y; // 192
-const SEARCH_H = 26;
-const LIST_Y = CONTENT_Y + SEARCH_H; // 74
-const LIST_H = DECK_H - LIST_Y; // 166
+const SURFACE: SurfaceId = (globalThis as { __vaultDeckSurface?: SurfaceId }).__vaultDeckSurface ?? "auxiliary";
+
+const CONTENT_H = DECK_H - T.CONTENT_Y; // 178
+const SEARCH_Y = T.CONTENT_Y + 2;
+const LIST_Y = T.CONTENT_Y + 30; // 92
+const LIST_H = DECK_H - LIST_Y; // 148
 const FILE_ROW_H = 28;
 const OUTLINE_ROW_H = 22;
+const WELL_Y = T.CONTENT_Y + 4;
+const WELL_H = DECK_H - WELL_Y - 4;
+const MAP_X = 4;
 const MAP_W = 40;
-const PAD_X = MAP_W;
-const PAD_W = DECK_W - MAP_W;
+const PAD_X = 50;
+const PAD_W = DECK_W - PAD_X - 4;
 /** Trackpad px → document px. A little over 1:1 so a full swipe of the pad
  *  moves more than one screen. */
 const PAD_GAIN = 1.4;
-const TAB_W = DECK_W / 4;
+/** Caret pad: px of travel per character column and per row. */
+const CARET_COL_PX = 9;
+const CARET_ROW_PX = 16;
+const CPAD_Y = KB_BOTTOM + 2; // 172
+const CPAD_H = DECK_H - CPAD_Y - 4; // 64
+const CPAD_W = 240;
+const SIDE_X = CPAD_W + 12; // 252
+const SIDE_W = DECK_W - SIDE_X - 6;
+const SIDE_BTN_H = 19;
+const SEG_X = 6;
+const SEG_W = DECK_W - 12;
+const SHEET_W = 280;
+const SHEET_H = 172;
+const SHEET_X = (DECK_W - SHEET_W) / 2;
+const SHEET_Y = (DECK_H - SHEET_H) / 2;
 
 interface Rect {
   x: number;
@@ -57,23 +76,15 @@ const TABS: Array<{ mode: Mode; label: string }> = [
   { mode: "edit", label: "Edit" },
 ];
 
-function tabClass(active: boolean): string {
-  return active
-    ? "absolute top-0 h-[24] items-center justify-center bg-[#26233a]"
-    : "absolute top-0 h-[24] items-center justify-center";
-}
-
-function tabText(active: boolean): string {
-  return active ? "text-xs text-[#e0def4] font-bold" : "text-xs text-[#908caa]";
-}
-
 export function Deck(props: { store: VaultStore }) {
   const store = props.store;
   const keys = createKeyPress();
   const mode = store.mode;
+  const tabOn = (tab: Mode): boolean => mode() === tab || (tab === "files" && mode() === "search");
 
   // ── recognizer rects follow the mode ──
   const tapRect = (): Rect => {
+    if (store.sheetOpen()) return { x: 0, y: 0, w: DECK_W, h: DECK_H };
     switch (mode()) {
       case "files":
         return { x: 0, y: 0, w: DECK_W, h: LIST_Y };
@@ -81,34 +92,40 @@ export function Deck(props: { store: VaultStore }) {
       case "edit":
         return { x: 0, y: 0, w: DECK_W, h: DECK_H };
       default:
-        return { x: 0, y: 0, w: DECK_W, h: CONTENT_Y };
+        return { x: 0, y: 0, w: DECK_W, h: T.CONTENT_Y };
     }
   };
   const padRect = (): Rect | null =>
-    mode() === "read" ? { x: PAD_X, y: CONTENT_Y, w: PAD_W, h: CONTENT_H } : null;
+    !store.sheetOpen() && mode() === "read" ? { x: PAD_X, y: WELL_Y, w: PAD_W, h: WELL_H } : null;
   const mapRect = (): Rect | null =>
-    mode() === "read" ? { x: 0, y: CONTENT_Y, w: MAP_W, h: CONTENT_H } : null;
+    !store.sheetOpen() && mode() === "read" ? { x: MAP_X, y: WELL_Y, w: MAP_W, h: WELL_H } : null;
+  const caretPadRect = (): Rect | null =>
+    !store.sheetOpen() && mode() === "edit" ? { x: 6, y: CPAD_Y, w: CPAD_W, h: CPAD_H } : null;
 
   const onKey = (act: KeyAction): void => {
-    if ("done" in act) {
-      store.setMode(mode() === "search" ? "files" : "read");
-      return;
-    }
     if ("layer" in act) {
       store.setKbLayer(act.layer);
       return;
     }
     const layer = store.kbLayer();
-    const text = "ch" in act ? act.ch : act.key === "space" ? " " : act.key === "tab" ? "  " : act.key === "enter" ? "\n" : null;
+    const text = "ch" in act ? act.ch : act.key === "space" ? " " : act.key === "enter" ? "\n" : null;
     if (mode() === "search") {
       if ("key" in act && act.key === "backspace") store.setQuery(store.query().slice(0, -1));
       else if ("key" in act && act.key === "enter") store.setMode("files");
       else if (text !== null) store.setQuery(store.query() + text);
     } else {
       if ("key" in act && act.key === "backspace") store.backspace();
-      else if (text !== null) store.type(text);
+      else if (text !== null) store.insert(text);
     }
     if (layer === "upper") store.setKbLayer("lower");
+  };
+
+  const sideButtonAt = (y: number): 0 | 1 | 2 | null => {
+    for (let i = 0; i < 3; i++) {
+      const top = CPAD_Y + i * (SIDE_BTN_H + 3);
+      if (y >= top && y < top + SIDE_BTN_H) return i as 0 | 1 | 2;
+    }
+    return null;
   };
 
   createGesture({
@@ -116,23 +133,48 @@ export function Deck(props: { store: VaultStore }) {
     region: { rect: tapRect },
     tapSlop: 8,
     onTap: (c) => {
-      if (c.y >= TABS_Y && c.y < CONTENT_Y) {
-        const tab = TABS[Math.min(3, Math.floor(c.x / TAB_W))]!;
+      if (store.sheetOpen()) {
+        const inside = c.x >= SHEET_X && c.x < SHEET_X + SHEET_W && c.y >= SHEET_Y && c.y < SHEET_Y + SHEET_H;
+        if (!inside || c.y >= SHEET_Y + SHEET_H - 30) {
+          if (inside && c.x < SHEET_X + SHEET_W / 2) store.save();
+          store.setSheetOpen(false);
+        }
+        return;
+      }
+      if (c.y < T.NAV_H) {
+        if (c.x >= DECK_W - 60) store.setSheetOpen(true);
+        return;
+      }
+      if (c.y >= T.SEG_Y && c.y < T.SEG_Y + T.SEG_H) {
+        const tab = TABS[Math.min(3, Math.floor((c.x - SEG_X) / (SEG_W / 4)))]!;
         if (tab.mode === "edit") store.enterEdit();
         else if (tab.mode === "read" && !store.doc()) store.setMode("files");
         else store.setMode(tab.mode);
         return;
       }
-      if (c.y < TABS_Y) return;
-      if (mode() === "files" && c.y < LIST_Y) {
-        store.setMode("search");
+      if (c.y < T.CONTENT_Y) return;
+      if (mode() === "files") {
+        if (c.y < LIST_Y) store.setMode("search");
         return;
       }
       if (mode() === "search" || mode() === "edit") {
-        const hit = keyboardHit(c.x, c.y, store.kbLayer());
-        if (!hit) return;
-        keys.press(hit);
-        onKey(hit.act);
+        if (c.y < KB_BOTTOM) {
+          const hit = keyboardHit(c.x, c.y, store.kbLayer());
+          if (!hit) return;
+          keys.press(hit);
+          onKey(hit.act);
+          return;
+        }
+        if (mode() === "search") {
+          if (c.x >= DECK_W - 70) store.setMode("files");
+          return;
+        }
+        if (c.x >= SIDE_X) {
+          const button = sideButtonAt(c.y);
+          if (button === 0) store.setSelecting(!store.selecting());
+          else if (button === 1) store.save();
+          else if (button === 2) store.leaveEdit();
+        }
       }
     },
   });
@@ -152,10 +194,7 @@ export function Deck(props: { store: VaultStore }) {
     onCancel: () => store.scroller.endDrag(0),
   });
 
-  const mapTo = (y: number): void => {
-    const f = (y - CONTENT_Y - 6) / (CONTENT_H - 12);
-    store.scrollToFraction(f);
-  };
+  const mapTo = (y: number): void => store.scrollToFraction((y - WELL_Y - 6) / (WELL_H - 12));
   createGesture({
     surface: SURFACE,
     region: { rect: mapRect },
@@ -168,6 +207,41 @@ export function Deck(props: { store: VaultStore }) {
     onPanMove: (c) => mapTo(c.y),
   });
 
+  // The caret pad: travel accumulates and spends itself in whole columns
+  // and rows, so a slow stylus moves one character at a time and a fast one
+  // sweeps. With Select on, the anchor stays where it was.
+  let padDx = 0;
+  let padDy = 0;
+  createGesture({
+    surface: SURFACE,
+    region: { rect: caretPadRect },
+    panSlop: 2,
+    onPanStart: () => {
+      padDx = 0;
+      padDy = 0;
+    },
+    onPanMove: (c) => {
+      padDx += c.fdx;
+      padDy += c.fdy;
+      while (padDx >= CARET_COL_PX) {
+        store.moveCaret(1, 0);
+        padDx -= CARET_COL_PX;
+      }
+      while (padDx <= -CARET_COL_PX) {
+        store.moveCaret(-1, 0);
+        padDx += CARET_COL_PX;
+      }
+      while (padDy >= CARET_ROW_PX) {
+        store.moveCaret(0, 1);
+        padDy -= CARET_ROW_PX;
+      }
+      while (padDy <= -CARET_ROW_PX) {
+        store.moveCaret(0, -1);
+        padDy += CARET_ROW_PX;
+      }
+    },
+  });
+
   // ── lists ──
   const listScroller = createScroller({
     max: () => Math.max(0, store.listTotal() * FILE_ROW_H - LIST_H),
@@ -176,7 +250,6 @@ export function Deck(props: { store: VaultStore }) {
   onFrame(() => {
     if (mode() === "files") store.setListViewport(Math.floor(listScroller.offset() / FILE_ROW_H));
   });
-
   const outlineItems = createMemo<OutlineItem[]>(() => store.outline() ?? []);
   const outlineScroller = createScroller({
     max: () => Math.max(0, outlineItems().length * OUTLINE_ROW_H - CONTENT_H),
@@ -184,45 +257,55 @@ export function Deck(props: { store: VaultStore }) {
   });
 
   const title = (): string => store.doc()?.title ?? "Pocket Vault";
-  const echo = (): string => (mode() === "search" ? `search: ${store.query()}` : store.activeLineText());
+  const dotClass = (): string => {
+    const s = store.mac.status();
+    return s === "linked" ? T.DOT_LINKED : s === "searching" ? T.DOT_SEARCHING : T.DOT_ABSENT;
+  };
 
   return (
-    <View debugName="Deck" class="relative w-full h-full bg-[#191724] overflow-hidden">
-      {/* status strip */}
-      <View class="absolute left-0 right-0 top-0 h-[24] bg-[#1f1d2e] overflow-hidden">
-        <View
-          class={
-            store.mac.status() === "linked"
-              ? "absolute left-[8] top-[9] w-[6] h-[6] rounded-full bg-[#9ccfd8]"
-              : "absolute left-[8] top-[9] w-[6] h-[6] rounded-full bg-[#eb6f92]"
-          }
-        />
-        <View class="absolute left-[20] top-0 h-[24] w-[150] overflow-hidden">
-          <Text class="absolute left-0 top-[4] text-sm text-[#e0def4]">{title()}</Text>
+    <View debugName="Deck" class={T.SCREEN}>
+      {/* navigation bar */}
+      <View class={T.NAV}>
+        <View class={T.NAV_HI} />
+        <View class={T.NAV_LO} />
+        <View class={T.NAV_RULE_TOP} />
+        <View class={T.NAV_RULE_BOTTOM} />
+        <View class={dotClass()} style={{ insetL: 10, insetT: 12 }} />
+        <View class="absolute left-[24] top-0 h-[32] w-[212] overflow-hidden">
+          <Text class="absolute left-0 top-[6] text-base text-[#3c4d6480] font-bold">{title()}</Text>
+          <Text class="absolute left-0 top-[7] text-base text-white font-bold">{title()}</Text>
         </View>
-        <View class="absolute right-[8] top-0 h-[24] w-[140] overflow-hidden flex-row justify-end">
-          <Text class="absolute right-0 top-[6] text-xs text-[#6e6a86]">{store.status()}</Text>
+        <View class={T.NAV_BUTTON} style={{ insetL: DECK_W - 54, width: 48 }}>
+          <View class={T.NAV_BUTTON_GLOSS} />
+          <Text class={T.NAV_BUTTON_TEXT_SHADOW}>Info</Text>
+          <Text class={T.NAV_BUTTON_TEXT}>Info</Text>
         </View>
       </View>
 
-      {/* tabs */}
-      <View class="absolute left-0 right-0 top-[24] h-[24] bg-[#191724]">
+      {/* segmented control */}
+      <View class={T.SEG} style={{ insetL: SEG_X, insetT: T.SEG_Y, width: SEG_W }}>
         <For each={TABS}>
           {(tab, i) => (
-            <View class={tabClass(mode() === tab.mode || (tab.mode === "files" && mode() === "search"))} style={{ insetL: i() * TAB_W, width: TAB_W }}>
-              <Text class={tabText(mode() === tab.mode || (tab.mode === "files" && mode() === "search"))}>{tab.label}</Text>
-            </View>
+            <>
+              <View class={tabOn(tab.mode) ? T.SEG_ITEM_ON : T.SEG_ITEM} style={{ insetL: i() * (SEG_W / 4), width: SEG_W / 4 }}>
+                <Text class={tabOn(tab.mode) ? T.SEG_TEXT_ON : T.SEG_TEXT}>{tab.label}</Text>
+              </View>
+              <Show when={i() > 0}>
+                <View class={T.SEG_DIVIDER} style={{ insetL: i() * (SEG_W / 4) - 1 }} />
+              </Show>
+            </>
           )}
         </For>
-        <View class="absolute left-0 right-0 bottom-0 h-[1] bg-[#26233a]" />
       </View>
 
       {/* files */}
       <Show when={mode() === "files"}>
-        <View class="absolute left-[6] right-[6] h-[22] rounded-[4] bg-[#26233a] border border-[#393552]" style={{ insetT: CONTENT_Y + 2 }}>
-          <Text class="absolute left-[8] top-[3] text-sm text-[#908caa]">{store.query() === "" ? "Search" : store.query()}</Text>
+        <View class={T.FIELD} style={{ insetL: 6, insetT: SEARCH_Y, width: DECK_W - 12 }}>
+          <Show when={store.query() === ""} fallback={<Text class={T.FIELD_TEXT}>{store.query()}</Text>}>
+            <Text class={T.FIELD_PLACEHOLDER}>Search</Text>
+          </Show>
         </View>
-        <View class="absolute left-0 right-0 bottom-0" style={{ insetT: LIST_Y }}>
+        <View class="absolute left-0 right-0 bottom-0 bg-white" style={{ insetT: LIST_Y }}>
           <VirtualList
             surface={SURFACE}
             controller={listScroller}
@@ -240,15 +323,15 @@ export function Deck(props: { store: VaultStore }) {
       {/* read: minimap + trackpad */}
       <Show when={mode() === "read"}>
         <Minimap store={store} />
-        <View class="absolute right-0 bottom-0 bg-[#1f1d2e]" style={{ insetL: PAD_X, insetT: CONTENT_Y }}>
-          <Text class="absolute left-0 right-0 top-[80] text-center text-xs text-[#403d52]">drag to scroll · hold to edit</Text>
-          <Text class="absolute left-0 right-0 top-[96] text-center text-xs text-[#403d52]">L/R page · B back · X edit · Y outline</Text>
+        <View class={T.WELL} style={{ insetL: PAD_X, insetT: WELL_Y, width: PAD_W, height: WELL_H }}>
+          <Text class={T.WELL_HINT} style={{ insetT: 70 }}>drag to scroll · hold to edit</Text>
+          <Text class={T.WELL_HINT} style={{ insetT: 86 }}>L/R page · B back · X edit · Y outline</Text>
         </View>
       </Show>
 
       {/* outline */}
       <Show when={mode() === "outline"}>
-        <View class="absolute left-0 right-0 bottom-0" style={{ insetT: CONTENT_Y }}>
+        <View class="absolute left-0 right-0 bottom-0 bg-white" style={{ insetT: T.CONTENT_Y }}>
           <VirtualList
             surface={SURFACE}
             controller={outlineScroller}
@@ -268,12 +351,41 @@ export function Deck(props: { store: VaultStore }) {
         </View>
       </Show>
 
-      {/* keyboard */}
+      {/* keyboard, and what sits below it */}
       <Show when={mode() === "edit" || mode() === "search"}>
-        <Keyboard store={store} pressed={keys.pressed} echo={echo} doneLabel="done" />
-        <Text class="absolute left-0 right-0 top-[212] text-center text-xs text-[#403d52]">
-          {mode() === "edit" ? "d-pad moves the caret · B done · START saves" : "enter to search the vault"}
-        </Text>
+        <Keyboard store={store} pressed={keys.pressed} />
+      </Show>
+      <Show when={mode() === "search"}>
+        <View class={T.FIELD} style={{ insetL: 6, insetT: CPAD_Y + 4, width: DECK_W - 84 }}>
+          <Show when={store.query() === ""} fallback={<Text class={T.FIELD_TEXT}>{store.query()}</Text>}>
+            <Text class={T.FIELD_PLACEHOLDER}>Search the vault</Text>
+          </Show>
+        </View>
+        <View class={T.BUTTON} style={{ insetL: DECK_W - 70, insetT: CPAD_Y + 4, width: 64, height: 24 }}>
+          <Text class={T.BUTTON_TEXT}>Cancel</Text>
+        </View>
+        <Text class={T.WELL_HINT} style={{ insetT: CPAD_Y + 38 }}>return searches · matches rank by relevance</Text>
+      </Show>
+      <Show when={mode() === "edit"}>
+        <View class={T.WELL} style={{ insetL: 6, insetT: CPAD_Y, width: CPAD_W, height: CPAD_H }}>
+          <Text class={T.WELL_HINT} style={{ insetT: 18 }}>{store.selecting() ? "drag to select" : "drag to move the caret"}</Text>
+          <Text class={T.WELL_HINT} style={{ insetT: 34 }}>{store.unconfirmed() > 0 ? `${store.unconfirmed()} edit(s) on the way` : "B done · X select · START save"}</Text>
+        </View>
+        <View class={store.selecting() ? T.BUTTON_ON : T.BUTTON} style={{ insetL: SIDE_X, insetT: CPAD_Y, width: SIDE_W, height: SIDE_BTN_H }}>
+          <Text class={store.selecting() ? T.BUTTON_TEXT_ON : T.BUTTON_TEXT}>Select</Text>
+        </View>
+        <View class={T.BUTTON} style={{ insetL: SIDE_X, insetT: CPAD_Y + SIDE_BTN_H + 3, width: SIDE_W, height: SIDE_BTN_H }}>
+          <Text class={T.BUTTON_TEXT}>Save</Text>
+        </View>
+        <View class={T.BUTTON} style={{ insetL: SIDE_X, insetT: CPAD_Y + 2 * (SIDE_BTN_H + 3), width: SIDE_W, height: SIDE_BTN_H }}>
+          <Text class={T.BUTTON_TEXT}>Done</Text>
+        </View>
+      </Show>
+
+      {/* status & settings */}
+      <Show when={store.sheetOpen()}>
+        <View class={T.SHEET_DIM} />
+        <Sheet store={store} />
       </Show>
     </View>
   );
@@ -281,12 +393,12 @@ export function Deck(props: { store: VaultStore }) {
 
 function FileRow(props: { store: VaultStore; index: number }) {
   const item = () => props.store.listItem(props.index);
-  const selected = () => props.store.selected() === props.index;
+  const on = () => props.store.selected() === props.index;
   return (
-    <View class={selected() ? "absolute left-0 right-0 top-0 h-[28] bg-[#26233a]" : "absolute left-0 right-0 top-0 h-[28]"}>
-      <Text class="absolute left-[10] top-[6] text-sm text-[#e0def4]">{item()?.title ?? ""}</Text>
-      <Text class="absolute right-[10] top-[8] text-xs text-[#6e6a86]">{item() ? `${Math.round(item()!.size / 1024)} K` : "…"}</Text>
-      <View class="absolute left-[10] right-0 bottom-0 h-[1] bg-[#1f1d2e]" />
+    <View class={on() ? T.CELL_ON : T.CELL} style={{ height: 28 }}>
+      <Text class={on() ? T.CELL_TEXT_ON : T.CELL_TEXT}>{item()?.title ?? ""}</Text>
+      <Text class={on() ? T.CELL_META_ON : T.CELL_META}>{item() ? `${Math.round(item()!.size / 1024)} K` : "…"}</Text>
+      <View class={on() ? T.CELL_RULE_ON : T.CELL_RULE} />
     </View>
   );
 }
@@ -294,21 +406,19 @@ function FileRow(props: { store: VaultStore; index: number }) {
 function OutlineRow(props: { item: OutlineItem | undefined }) {
   const level = () => props.item?.level ?? 1;
   return (
-    <View class="absolute left-0 right-0 top-0 h-[22]">
-      <Text
-        class={level() === 1 ? "absolute top-[3] text-sm text-[#e0def4] font-bold" : level() === 2 ? "absolute top-[4] text-xs text-[#e0def4]" : "absolute top-[4] text-xs text-[#908caa]"}
-        style={{ insetL: 10 + (level() - 1) * 12 }}
-      >
+    <View class={T.CELL} style={{ height: 22 }}>
+      <Text class={level() === 1 ? T.CELL_TEXT_BOLD : level() === 2 ? T.CELL_TEXT_SMALL : T.CELL_TEXT_DIM} style={{ insetL: 10 + (level() - 1) * 12 }}>
         {props.item?.text ?? ""}
       </Text>
+      <View class={T.CELL_RULE} />
     </View>
   );
 }
 
 function Minimap(props: { store: VaultStore }) {
   const store = props.store;
-  // 96 buckets on 180 px would be sub-pixel bars; pairs are averaged into
-  // 48 bars of 2 px with a 1 px gap, which reads as the note's silhouette.
+  // 96 buckets on 170 px would be sub-pixel bars; pairs are averaged into
+  // 48 bars of 2 px, which reads as the note's silhouette.
   const buckets = createMemo(() => {
     const map = store.doc()?.map ?? "";
     const out: number[] = [];
@@ -319,19 +429,46 @@ function Minimap(props: { store: VaultStore }) {
     }
     return out;
   });
-  const viewH = () => Math.max(8, Math.round((STAGE_H / Math.max(STAGE_H, store.docHeight())) * (CONTENT_H - 12)));
-  const viewY = () => CONTENT_Y + 6 + Math.round(store.scrollFraction() * (CONTENT_H - 12 - viewH()));
+  const pitch = (WELL_H - 12) / (MAP_BUCKETS / 2);
+  const viewH = () => Math.max(8, Math.round((STAGE_H / Math.max(STAGE_H, store.docHeight())) * (WELL_H - 12)));
+  const viewY = () => 6 + Math.round(store.scrollFraction() * (WELL_H - 12 - viewH()));
   return (
-    <View class="absolute left-0 bottom-0 bg-[#191724]" style={{ width: MAP_W, insetT: CONTENT_Y }}>
+    <View class={T.WELL} style={{ insetL: MAP_X, insetT: WELL_Y, width: MAP_W, height: WELL_H }}>
       <For each={buckets()}>
         {(density, i) => (
-          <View
-            class="absolute left-[4] h-[2] bg-[#6e6a86]"
-            style={{ insetT: 6 + Math.round(i() * ((CONTENT_H - 12) / (MAP_BUCKETS / 2))), width: 3 + Math.round((density / 35) * 28) }}
-          />
+          <View class={T.MINIMAP_BAR} style={{ insetL: 4, insetT: 6 + Math.round(i() * pitch), width: 3 + Math.round((density / 35) * 27) }} />
         )}
       </For>
-      <View class="absolute left-[1] w-[38] rounded-[2] border border-[#c4a7e7] bg-[#c4a7e722]" style={{ insetT: viewY() - CONTENT_Y, height: viewH() }} />
+      <View class={T.MINIMAP_VIEW} style={{ insetL: 1, insetT: viewY(), width: MAP_W - 4, height: viewH() }} />
+    </View>
+  );
+}
+
+function Sheet(props: { store: VaultStore }) {
+  const store = props.store;
+  const row = (label: string, value: () => string, i: number) => (
+    <>
+      <Text class={T.SHEET_LABEL} style={{ insetL: 14, insetT: 36 + i * 22 }}>{label}</Text>
+      <View class="absolute overflow-hidden" style={{ insetL: 96, insetT: 36 + i * 22, width: SHEET_W - 108, height: 18 }}>
+        <Text class={T.SHEET_VALUE}>{value()}</Text>
+      </View>
+      <View class={T.SHEET_RULE} style={{ insetT: 54 + i * 22 }} />
+    </>
+  );
+  return (
+    <View class={T.SHEET} style={{ insetL: SHEET_X, insetT: SHEET_Y, width: SHEET_W, height: SHEET_H }}>
+      <Text class={T.SHEET_TITLE}>Pocket Vault</Text>
+      {row("Companion", () => (store.mac.status() === "linked" ? store.mac.name() : "—"), 0)}
+      {row("Link", () => store.mac.status(), 1)}
+      {row("Notes", () => String(store.listTotal()), 2)}
+      {row("Open note", () => (store.doc() ? `${store.doc()!.rows} rows · rev ${store.doc()!.rev}` : "none"), 3)}
+      {row("Last error", () => store.lastError() ?? "none", 4)}
+      <View class={T.BUTTON} style={{ insetL: 14, insetT: SHEET_H - 26, width: SHEET_W / 2 - 20, height: 20 }}>
+        <Text class={T.BUTTON_TEXT}>Save now</Text>
+      </View>
+      <View class={T.BUTTON_ON} style={{ insetL: SHEET_W / 2 + 6, insetT: SHEET_H - 26, width: SHEET_W / 2 - 20, height: 20 }}>
+        <Text class={T.BUTTON_TEXT_ON}>Close</Text>
+      </View>
     </View>
   );
 }

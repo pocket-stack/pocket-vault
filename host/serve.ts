@@ -14,7 +14,8 @@
 //   doc.rows     one window of rows under the current revision
 //   doc.outline  headings with the rows they start
 //   doc.focus    show one line raw for editing (Obsidian's live preview)
-//   doc.edit     insert/delete at (line, col); the file is written 400 ms
+//   doc.edit     replace a source range (insert, delete, split, join) under a
+//                per-session sequence number; the file is written 400 ms
 //                after the last edit
 //   doc.save     write now
 // Event `vault.changed` announces a new index version after the folder
@@ -22,7 +23,7 @@
 
 import { writeFileSync } from "node:fs";
 import { hostname } from "node:os";
-import { createCompanionHost } from "../vendor/pocketjs/tools/companion-host.ts";
+import { createCompanionHost, type CompanionContext } from "../vendor/pocketjs/tools/companion-host.ts";
 import { serveCompanion } from "../vendor/pocketjs/tools/companion-serve.ts";
 import {
   PAGE_ROWS,
@@ -42,11 +43,11 @@ import { VaultIndex } from "./index.ts";
 import {
   docInfo,
   docTitle,
-  editAt,
   focusLine,
   layoutDoc,
   Metrics,
   outline,
+  replaceRange,
   rowsOf,
   sourceText,
   type Laid,
@@ -71,6 +72,7 @@ export function createVaultService(options: VaultServiceOptions) {
   const open = new Map<number, Laid>();
   const saveTimers = new Map<number, ReturnType<typeof setTimeout>>();
   const titles = new Map<number, string>();
+  const lastEdits = new Map<string, { seq: number; patch: Patch }>();
 
   const load = (id: number): Laid => {
     let doc = open.get(id);
@@ -140,9 +142,21 @@ export function createVaultService(options: VaultServiceOptions) {
       const doc = load(params.id);
       return focusLine(metrics, doc, params.line, title(doc));
     },
-    "doc.edit": (params: EditParams): Patch => {
+    "doc.edit": (params: EditParams, context: CompanionContext): Patch => {
       const doc = load(params.id);
-      const patch = editAt(metrics, doc, params.line, params.col, params.insert, params.del, title(doc));
+      // A re-sent edit (the link dropped after it was applied) gets the same
+      // patch again instead of being applied twice. Keyed by the GUEST
+      // session from the hello, which survives a reconnect; the transport
+      // session does not.
+      const key = `${context.session.hello?.session ?? context.session.id}:${params.id}`;
+      const last = lastEdits.get(key);
+      if (last && params.seq <= last.seq) {
+        if (params.seq === last.seq) return last.patch;
+        throw new Error(`edit ${params.seq} is older than ${last.seq}`);
+      }
+      const patch = replaceRange(metrics, doc, params.from, params.to, params.text, title(doc));
+      patch.seq = params.seq;
+      lastEdits.set(key, { seq: params.seq, patch });
       titles.set(doc.id, docTitle(doc, index.note(doc.id)?.title ?? title(doc)));
       scheduleSave(doc);
       return patch;
@@ -160,7 +174,12 @@ export function createVaultService(options: VaultServiceOptions) {
     app: VAULT_APP,
     name: hostname().replace(/\.local$/, ""),
     methods,
-    onHello: (session, hello) => log(`vault: guest ${hello.device ?? "?"} session ${hello.session} on ${session.peer.label ?? session.id}`),
+    onHello: (session, hello) => {
+      // A fresh guest boot starts its sequence over; forget older guests'
+      // sequences so the map stays small.
+      for (const key of lastEdits.keys()) if (!key.startsWith(`${hello.session}:`)) lastEdits.delete(key);
+      log(`vault: guest ${hello.device ?? "?"} session ${hello.session} on ${session.peer.label ?? session.id}`);
+    },
     onClose: (session) => log(`vault: guest ${session.peer.label ?? session.id} left`),
     log,
   });

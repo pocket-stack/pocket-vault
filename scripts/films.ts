@@ -56,24 +56,27 @@ const CUTS: Cut[] = [
       await deck.frames(10);
       await deck.drag(160, 200, 120, 8); // scroll the list
       await deck.frames(30);
-      await deck.tap(120, 116); // a note
+      await deck.tap(120, 134); // a note
       await deck.frames(12);
-      await deck.tap(120, 36); // Read
+      await deck.tap(125, 47); // Read
       await deck.frames(16);
       await deck.drag(180, 190, 90, 10); // trackpad swipe
       await deck.frames(40);
       await deck.drag(20, 60, 150, 24); // scrub the minimap
       await deck.frames(24);
-      await deck.tap(200, 36); // Outline
+      await deck.tap(205, 47); // Outline
       await deck.frames(20);
-      await deck.tap(120, 96); // a heading
+      await deck.tap(120, 96); // a heading (outline rows start at 62)
       await deck.frames(24);
-      await deck.tap(280, 36); // Edit
+      await deck.tap(285, 47); // Edit
       await deck.frames(20);
-      for (const [x, y] of [[54, 133], [86, 133], [118, 133]] as const) {
-        await deck.tap(x, y);
+      for (const [x, y] of [[36, 102], [67, 102], [98, 102]] as const) {
+        await deck.tap(x, y); // a s d
         await deck.frames(6);
       }
+      await deck.tap(283, 181); // Select
+      await deck.frames(6);
+      await deck.drag(120, 200, 200, 10); // drag on the caret pad: selects to the left
       await deck.frames(20);
     },
   },
@@ -91,7 +94,7 @@ const CUTS: Cut[] = [
       stage.store.enterEdit();
       await stage.frames(14);
       for (const ch of "Typed on a 3DS, laid out on a Mac. ") {
-        stage.store.type(ch);
+        stage.store.insert(ch);
         await stage.frames(3);
       }
       await stage.frames(12);
