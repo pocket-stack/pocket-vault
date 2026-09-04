@@ -157,11 +157,17 @@ export interface TreeEntry {
 export interface TreeParams {
   /** "" for the vault root. */
   folder: string;
+  /** Entries to return. Folders come first, so they are never cut. */
+  limit?: number;
 }
 
 export interface TreeResult {
   folder: string;
   entries: TreeEntry[];
+  /** Children the folder has; `entries` may be a prefix of them. A folder
+   *  with hundreds of notes is browsed in the note list, not the tree — the
+   *  tree is a navigator, and one reply must fit the wire. */
+  total: number;
 }
 
 export interface ListParams {
@@ -346,6 +352,8 @@ export type VaultMethods = {
  *  the screen plus the direction of travel, and stays one line on the wire. */
 export const PAGE_ROWS = 32;
 export const LIST_PAGE = 24;
+/** Tree entries fetched per folder. */
+export const TREE_LIMIT = 48;
 
 /** Row heights → prefix sum of row tops (length rows + 1). */
 export function rowTops(kinds: string): Int32Array {

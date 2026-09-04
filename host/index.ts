@@ -31,6 +31,8 @@ import { classify } from "../app/markdown.ts";
 import type { ListItem, TagItem, TreeEntry } from "../app/protocol.ts";
 import { linksOf, snippetOf, tagsOf, titleOf } from "./layout.ts";
 
+/** Bump when the tables below change shape. */
+const SCHEMA_VERSION = 2;
 const INDEX_DIR = ".pocket-vault";
 const TRASH_DIR = ".trash";
 
@@ -61,6 +63,17 @@ export class VaultIndex {
     }
     this.db = new Database(file);
     this.db.exec("PRAGMA journal_mode = WAL");
+    // The schema is versioned because `CREATE TABLE IF NOT EXISTS` does not
+    // migrate: an index written by an older build keeps its old columns and
+    // every query against a new one fails. Re-reading the vault costs a
+    // second or two, so a version bump simply rebuilds.
+    const version = this.db.query<{ user_version: number }, []>("PRAGMA user_version").get()!.user_version;
+    if (version !== SCHEMA_VERSION) {
+      for (const table of ["notes_fts", "links", "tags", "notes"]) {
+        this.db.exec(`DROP TABLE IF EXISTS ${table}`);
+      }
+      this.db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
+    }
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS notes (
         id INTEGER PRIMARY KEY,
@@ -167,8 +180,10 @@ export class VaultIndex {
     return this.version;
   }
 
-  /** One folder's children: subfolders with their note counts, then notes. */
-  tree(folder: string): TreeEntry[] {
+  /** One folder's children: subfolders with their note counts, then notes,
+   *  cut to `limit` — the reply has to fit one companion line, and a folder
+   *  with hundreds of notes is browsed in the note list. */
+  tree(folder: string, limit = 48): { entries: TreeEntry[]; total: number } {
     const prefix = folder === "" ? "" : `${folder}/`;
     const dirs = new Map<string, number>();
     for (const row of this.db
@@ -192,7 +207,7 @@ export class VaultIndex {
       .all(folder)) {
       entries.push({ path: row.path, name: row.title, folder: false, id: row.id });
     }
-    return entries;
+    return { entries: entries.slice(0, Math.max(1, limit)), total: entries.length };
   }
 
   /** A page of notes: by title, by folder, by tag, or by search relevance. */

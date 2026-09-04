@@ -174,10 +174,15 @@ export function Deck(props: { store: VaultStore }) {
       }
       if (contact.y >= T.TOOLBAR_Y) {
         const tool = toolAt(contact.x);
+        if (tool === 3) {
+          // Armed by the first tap, done by the second.
+          if (store.deleteArmed()) store.deleteNote();
+          else store.armDelete();
+          return;
+        }
         if (tool === 0) store.openMenu("vault");
         else if (tool === 1) store.newNote();
         else if (tool === 2) store.newFolder();
-        else if (tool === 3) store.deleteNote();
       }
     },
   });
@@ -295,6 +300,7 @@ export function Deck(props: { store: VaultStore }) {
                   store.setFolder(row.entry.path);
                   store.toggleFolder(row.entry.path);
                 } else if (row.entry.id !== undefined) store.openNote(row.entry.id);
+                else store.setFolder(row.entry.path); // the "N more" row
               }}
             />
           </Pane>
@@ -733,11 +739,16 @@ function Toolbar(props: { store: VaultStore }) {
       <View class={T.TOOL_BUTTON} style={{ insetL: 162, insetT: 3, width: 118 }}>
         <Text class={T.TOOL_TEXT}>New Folder</Text>
       </View>
-      {/* delete: a lid and a can */}
-      <View class={T.TOOL_BUTTON} style={{ insetL: 284, insetT: 3, width: 30 }}>
-        <View class="absolute left-[9] top-[5] w-[12] h-[2] bg-[#3c4552]" />
-        <View class="absolute left-[11] top-[8] w-[8] h-[8] rounded-[1] border border-[#3c4552]" />
+      {/* delete: a lid and a can, red once armed */}
+      <View class={store.deleteArmed() ? T.TOOL_BUTTON_DANGER : T.TOOL_BUTTON} style={{ insetL: 284, insetT: 3, width: 30 }}>
+        <View class={store.deleteArmed() ? T.TRASH_LID_ON : T.TRASH_LID} />
+        <View class={store.deleteArmed() ? T.TRASH_CAN_ON : T.TRASH_CAN} />
       </View>
+      <Show when={store.deleteArmed()}>
+        <Text class={T.TOOL_TEXT_DANGER} style={{ insetL: 162, insetT: 6, width: 118 }}>
+          tap again to delete
+        </Text>
+      </Show>
       <Show when={store.lastError() !== null}>
         <Text class={T.WELL_HINT} style={{ insetT: -13 }}>{store.lastError() ?? ""}</Text>
       </Show>

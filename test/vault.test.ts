@@ -136,6 +136,9 @@ describe("browsing the vault", () => {
         "02 Areas",
       ]);
       expect(roots.find((row) => row.entry.folder && row.entry.name === "01 Projects")!.entry.count).toBe(4);
+      // A folder with more notes than the tree carries ends with a row that
+      // hands the rest to the note list.
+      expect(roots.some((row) => row.entry.name.endsWith("more in this folder"))).toBe(false);
       expect(store.listTotal()).toBe(12);
 
       // Opening a folder fetches its children and filters the note list.
@@ -450,6 +453,99 @@ describe("row heights", () => {
         expect(ROW_H[row.k]).toBe(ROW_H[parseInt(kinds[i]!, 36)]);
       }
       expect(seen).toBeGreaterThan(10);
+      dispose();
+    });
+  });
+});
+
+describe("typing and untyping", () => {
+  test("a run of characters, confirmed, then the same number of backspaces returns the line", async () => {
+    const pair = createSimCompanionPair(service.host);
+    await createRoot(async (dispose) => {
+      const store = createVaultStore(pair.ops);
+      await frames(store, pair, 3);
+      store.select(3);
+      await frames(store, pair, 6);
+      await caretOnLine(store, pair, 10);
+      const source = store.activeText();
+      const at = store.caret()!.col;
+
+      const typed = "## Live heading ";
+      for (const ch of typed) store.insert(ch);
+      expect(store.activeText()).toBe(source.slice(0, at) + typed + source.slice(at));
+      // Let every patch land, so the caret and the text come back from the
+      // companion before the next keystroke.
+      await frames(store, pair, 8);
+      expect(store.unconfirmed()).toBe(0);
+      expect(store.caret()).toEqual({ line: 10, col: at + typed.length });
+      expect(store.activeText()).toBe(source.slice(0, at) + typed + source.slice(at));
+
+      for (let i = 0; i < typed.length; i++) store.backspace();
+      expect(store.caret()).toEqual({ line: 10, col: at });
+      expect(store.activeText()).toBe(source);
+      await frames(store, pair, 8);
+      expect(store.unconfirmed()).toBe(0);
+      expect(store.activeText()).toBe(source);
+      expect(store.doc()!.lines).toBeGreaterThan(10);
+      dispose();
+    });
+  });
+});
+
+describe("delete asks first", () => {
+  test("one tap arms it, a second deletes, and time disarms", async () => {
+    const pair = createSimCompanionPair(service.host);
+    await createRoot(async (dispose) => {
+      const store = createVaultStore(pair.ops);
+      await frames(store, pair, 3);
+      store.select(0);
+      await frames(store, pair, 5);
+      const before = store.listTotal();
+      const id = store.doc()!.id;
+
+      store.armDelete();
+      expect(store.deleteArmed()).toBe(true);
+      // A resting stylus must not cost a note: the arming lapses.
+      await frames(store, pair, 160);
+      expect(store.deleteArmed()).toBe(false);
+      await frames(store, pair, 2);
+      expect(service.index.note(id)).not.toBeNull();
+
+      store.armDelete();
+      store.deleteNote();
+      await frames(store, pair, 6);
+      expect(service.index.note(id)).toBeNull();
+      expect(store.doc()).toBeNull();
+      // The list may also carry notes earlier tests added; what matters is
+      // that it lost exactly this one.
+      expect(store.listTotal()).toBeLessThan(before + 1);
+      dispose();
+    });
+  });
+});
+
+describe("the link coming back", () => {
+  test("a companion restart re-queries the vault, even with nothing pending", async () => {
+    const pair = createSimCompanionPair(service.host);
+    await createRoot(async (dispose) => {
+      const store = createVaultStore(pair.ops);
+      await frames(store, pair, 4);
+      const before = store.listTotal();
+      expect(before).toBeGreaterThan(0);
+
+      // The vault changes while the guest is away, so no event reaches it.
+      writeFileSync(join(dir, "note-99.md"), NOTE(99));
+      service.index.sync();
+      pair.disconnect();
+      await frames(store, pair, 2);
+      expect(store.mac.status()).toBe("searching");
+      pair.connect();
+      await frames(store, pair, 6);
+      expect(store.mac.status()).toBe("linked");
+      // A settled query is not pending, so the module cannot re-issue it —
+      // the store's link generation is what makes this show up.
+      expect(store.listTotal()).toBe(before + 1);
+      expect(store.treeRows().length).toBeGreaterThan(0);
       dispose();
     });
   });

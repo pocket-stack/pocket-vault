@@ -150,6 +150,12 @@ export const TOOLBAR_RULE = "absolute left-0 right-0 top-0 h-[1] bg-[#8f959f]";
 export const TOOL_BUTTON = "absolute h-[20] rounded-[4] border border-[#7f858f] bg-gradient-to-b from-[#fbfcfd] to-[#dfe3e9]";
 export const TOOL_BUTTON_ON = "absolute h-[20] rounded-[4] border border-[#25507f] bg-gradient-to-b from-[#5b9bf3] to-[#2b6fd6]";
 export const TOOL_TEXT = "absolute left-0 right-0 top-[3] text-center text-xs text-[#1c1c1e] font-bold";
+export const TOOL_BUTTON_DANGER = "absolute h-[20] rounded-[4] border border-[#8a2b2b] bg-gradient-to-b from-[#f08a8a] to-[#d24b4b]";
+export const TOOL_TEXT_DANGER = "absolute text-center text-xs text-[#7a1f1f] font-bold";
+export const TRASH_LID = "absolute left-[9] top-[5] w-[12] h-[2] bg-[#3c4552]";
+export const TRASH_CAN = "absolute left-[11] top-[8] w-[8] h-[8] rounded-[1] border border-[#3c4552]";
+export const TRASH_LID_ON = "absolute left-[9] top-[5] w-[12] h-[2] bg-white";
+export const TRASH_CAN_ON = "absolute left-[11] top-[8] w-[8] h-[8] rounded-[1] border border-white";
 export const TOOL_TEXT_ON = "absolute left-0 right-0 top-[3] text-center text-xs text-white font-bold";
 
 // ── Held-shoulder menu ─────────────────────────────────────────────────────

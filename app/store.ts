@@ -39,6 +39,7 @@ import {
   KIND_CHARS,
   LIST_PAGE,
   PAGE_ROWS,
+  TREE_LIMIT,
   rowAtY,
   rowTops,
   VAULT_APP,
@@ -107,6 +108,8 @@ const PAGES_PER_FRAME_MAX = 3;
 /** Frames a shoulder must be held before its menu opens; a shorter press is
  *  a page turn. */
 const HOLD_FRAMES = 12;
+/** How long a delete stays armed. */
+const DELETE_ARMED_FRAMES = 150;
 
 interface EditOp {
   from: Pos;
@@ -190,6 +193,11 @@ export interface VaultStore {
   // ── files ──
   newNote(): void;
   newFolder(): void;
+  /** Delete asks first: one tap arms it, a second within DELETE_ARMED_FRAMES
+   *  does it, and anything else disarms. A resistive panel reads a resting
+   *  stylus as a tap, and a note is not something to lose that way. */
+  deleteArmed: Accessor<boolean>;
+  armDelete(): void;
   deleteNote(): void;
 
   // ── the held-shoulder menus ──
@@ -226,7 +234,27 @@ export function createVaultStore(ops?: CompanionOps | null): VaultStore {
   };
 
   // ── the vault's version ───────────────────────────────────────────────────
+  // Two things invalidate what the guest knows about the vault: the folder
+  // changing on disk (the companion says so) and the LINK coming back. A
+  // settled query is not pending, so the companion module cannot re-issue
+  // it; the link generation goes into every vault query key instead, which
+  // is what makes a companion restart show up on screen.
   const [version, setVersion] = createSignal(0);
+  const [linkGeneration, setLinkGeneration] = createSignal(0);
+  let wasLinked = false;
+  createComputed(() => {
+    const linked = mac.status() === "linked";
+    if (linked && !wasLinked) {
+      treeCache.clear();
+      listCache.clear();
+      batch(() => {
+        setLinkGeneration((n) => n + 1);
+        setTreeRev((n) => n + 1);
+        setListRev((n) => n + 1);
+      });
+    }
+    wasLinked = linked;
+  });
   const treeCache = new Map<string, TreeEntry[]>();
   const listCache = new Map<number, ListItem>();
   const [treeRev, setTreeRev] = createSignal(0);
@@ -245,25 +273,33 @@ export function createVaultStore(ops?: CompanionOps | null): VaultStore {
   const [expandedSet, setExpandedSet] = createSignal<readonly string[]>([""]);
   const [folder, setFolderSignal] = createSignal("");
   /** One folder at a time is fetched; the tree fills in as it opens. */
+  const treeKey = (path: string): string => `${version()}:${linkGeneration()}:${path}`;
   const nextFolder = createMemo<string | null>(() => {
     void treeRev();
-    for (const path of expandedSet()) if (!treeCache.has(`${version()}:${path}`)) return path;
+    for (const path of expandedSet()) if (!treeCache.has(treeKey(path))) return path;
     return null;
   });
   createComputed(() => {
     const path = nextFolder();
     if (path === null) return;
-    const key = `${version()}:${path}`;
+    const key = treeKey(path);
     treeCache.set(key, []); // claim it, so this does not re-fire every frame
     count("vault.tree");
-    mac.core.request("vault.tree", { folder: path }, (body) => {
+    mac.core.request("vault.tree", { folder: path, limit: TREE_LIMIT }, (body) => {
       stats.replies += 1;
       if (!("ok" in body)) {
         treeCache.delete(key);
         fail(new Error(body.err));
         return;
       }
-      treeCache.set(key, (body.ok as TreeResult).entries);
+      const result = body.ok as TreeResult;
+      const entries = [...result.entries];
+      if (result.total > entries.length) {
+        // The rest of this folder is browsed in the note list; the row says
+        // so and selects the folder.
+        entries.push({ path, name: `${result.total - entries.length} more in this folder`, folder: false });
+      }
+      treeCache.set(key, entries);
       setTreeRev((n) => n + 1);
     });
   });
@@ -275,7 +311,7 @@ export function createVaultStore(ops?: CompanionOps | null): VaultStore {
     const open = expandedSet();
     const out: TreeRow[] = [];
     const walk = (path: string, depth: number): void => {
-      for (const entry of treeCache.get(`${version()}:${path}`) ?? []) {
+      for (const entry of treeCache.get(treeKey(path)) ?? []) {
         out.push({ entry, depth });
         if (entry.folder && open.includes(entry.path)) walk(entry.path, depth + 1);
       }
@@ -290,7 +326,7 @@ export function createVaultStore(ops?: CompanionOps | null): VaultStore {
   const [listFirst, setListFirst] = createSignal(0);
   const [listTotal, setListTotal] = createSignal(0);
   const [selected, setSelected] = createSignal(-1);
-  const listKey = createMemo(() => `${version()}|${query()}|${folder()}|${tag()}`);
+  const listKey = createMemo(() => `${version()}|${linkGeneration()}|${query()}|${folder()}|${tag()}`);
   let lastListKey = "";
   createComputed(() => {
     const key = listKey();
@@ -307,7 +343,7 @@ export function createVaultStore(ops?: CompanionOps | null): VaultStore {
     const from = Math.max(0, Math.floor(listFirst() / LIST_PAGE) * LIST_PAGE - LIST_PAGE);
     return [
       "vault.list",
-      { q: query(), folder: folder(), tag: tag(), offset: from, limit: LIST_PAGE * 2, v: version() },
+      { q: query(), folder: folder(), tag: tag(), offset: from, limit: LIST_PAGE * 2, v: version(), g: linkGeneration() },
     ];
   });
   createComputed(() => {
@@ -320,7 +356,9 @@ export function createVaultStore(ops?: CompanionOps | null): VaultStore {
       setListRev((n) => n + 1);
     });
   });
-  const tagsQuery = createQuery<TagItem[]>(mac, () => (tab() === "tags" ? ["vault.tags", { v: version() }] : null));
+  const tagsQuery = createQuery<TagItem[]>(mac, () =>
+    tab() === "tags" ? ["vault.tags", { v: version(), g: linkGeneration() }] : null,
+  );
 
   // ── the open document ─────────────────────────────────────────────────────
   const [doc, setDoc] = createSignal<DocInfo | null>(null);
@@ -991,9 +1029,13 @@ export function createVaultStore(ops?: CompanionOps | null): VaultStore {
     }, fail);
   };
 
+  const [deleteArmed, setDeleteArmed] = createSignal(false);
+  let deleteArmedAt = -1000;
+
   const deleteNote = (): void => {
     const d = doc();
     if (!d) return;
+    setDeleteArmed(false);
     count("vault.delete");
     mac.call("vault.delete", { id: d.id }).then(() => {
       stats.replies += 1;
@@ -1026,7 +1068,7 @@ export function createVaultStore(ops?: CompanionOps | null): VaultStore {
     { label: "Toggle task", run: () => store.toggleTask() },
     { label: "Outline & links", hint: "Y", run: () => store.setTab("links") },
     { label: "Save now", hint: "START", run: () => store.save() },
-    { label: "Delete note", run: () => deleteNote() },
+    { label: "Delete note", run: () => store.armDelete() },
   ];
   const menuItems = createMemo<readonly MenuItem[]>(() => (menu() === "vault" ? VAULT_ITEMS : ACTION_ITEMS));
 
@@ -1040,6 +1082,7 @@ export function createVaultStore(ops?: CompanionOps | null): VaultStore {
   const frame = (buttons: number): void => {
     frameCount += 1;
     scroller.step();
+    if (deleteArmed() && frameCount - deleteArmedAt > DELETE_ARMED_FRAMES) setDeleteArmed(false);
     const pressed = buttons & ~prevButtons;
     const released = prevButtons & ~buttons;
     prevButtons = buttons;
@@ -1245,6 +1288,12 @@ export function createVaultStore(ops?: CompanionOps | null): VaultStore {
     },
     newNote,
     newFolder,
+    deleteArmed,
+    armDelete: () => {
+      if (!doc()) return;
+      deleteArmedAt = frameCount;
+      setDeleteArmed(true);
+    },
     deleteNote,
     menu,
     menuIndex,

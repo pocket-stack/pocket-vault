@@ -31,6 +31,7 @@ import { createCompanionHost, type CompanionContext } from "../vendor/pocketjs/t
 import { serveCompanion } from "../vendor/pocketjs/tools/companion-serve.ts";
 import {
   PAGE_ROWS,
+  TREE_LIMIT,
   VAULT_APP,
   type CreateParams,
   type DocInfo,
@@ -145,7 +146,8 @@ export function createVaultService(options: VaultServiceOptions) {
   const methods = {
     "vault.tree": (params: TreeParams): TreeResult => {
       const folder = params.folder ?? "";
-      return { folder, entries: index.tree(folder) };
+      const { entries, total } = index.tree(folder, params.limit ?? TREE_LIMIT);
+      return { folder, entries, total };
     },
     "vault.list": (params: ListParams): ListResult => {
       const page = index.list(
@@ -217,6 +219,13 @@ export function createVaultService(options: VaultServiceOptions) {
       }
       const patch = replaceRange(metrics, doc, params.from, params.to, params.text, title(doc));
       patch.seq = params.seq;
+      if (process.env.POCKET_VAULT_TRACE) {
+        log(
+          `vault: edit ${params.seq} ${JSON.stringify(params.from)}..${JSON.stringify(params.to)} ` +
+            `${JSON.stringify(params.text)} → caret ${JSON.stringify(patch.caret)} ` +
+            `spans ${patch.spans.length} total ${patch.total}${patch.full ? " FULL" : ""}`,
+        );
+      }
       lastEdits.set(key, { seq: params.seq, patch });
       retitle(doc);
       scheduleSave(doc);
