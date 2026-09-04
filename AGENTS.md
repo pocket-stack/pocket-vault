@@ -21,7 +21,7 @@ first, and this repository moves its pin.
 
 ```sh
 bun run check                        # typecheck + tests (guest ↔ companion over the sim pair)
-bun run companion -- --unicast <ip>  # the Mac side
+bun run companion -- --unicast <ip> [--unicast <ip2>]   # the Mac side
 bun run push --host <console-ip>     # rebuild the guest, hot-push it (~20 s)
 bun run probe --host <console-ip>    # status, stats, tree, screenshot of both screens
 bun run shots                        # both screens from the sim → media/
@@ -80,12 +80,25 @@ needs the console back at the Homebrew Launcher.
   this host" in the status strip means `ui.svcOpen` is missing; `bun run
   probe --host <ip> -- --eval 'typeof ui.svcOpen'` confirms it, and only a
   reflash fixes it.
+- **Launching the `.3dsx` on a card that has run another Pocket app boots
+  THAT app.** The runtime's package state (`sdmc:/pocketjs/runtime/state`,
+  `packages/`) is global per card, so `startup_choice` loads the last
+  globally active package — a console that last ran Pocket Term shows Pocket
+  Term's UI under our binary. Two ways out: while ftpd is open, upload the
+  package as `pocketjs/runtime/pending.pocket` (the runtime promotes it on
+  the next boot), or just launch and `bun run push --host <ip>`, which
+  installs it as a candidate and commits. Per-app runtime slots are upstream
+  PR #355 and not in this pin.
 - **`bun run push --host <ip>` wants a key named for that address.** Keys
   live in `.pocket/devices/<ip>-8131.key` (git-ignored) and are planted into
   the submodule before the tool runs. Discovery matches by device id and
   usually finds any key for the console, but when the UDP reply is missed
   the tool falls back to the address-named file and says "not paired" —
-  copy the console's key to `<current-ip>-8131.key`.
+  copy the console's key to `<current-ip>-8131.key`. A console keeps its
+  device id across networks, so a key from an old address still works —
+  `3ds:dev discover` prints the id, and any key file with that id pairs.
+- **A console on another subnet needs `--unicast`.** The beacon's broadcast
+  does not cross subnets; pass every console's address (they can repeat).
 - **The Info sheet counts requests.** `rows N · edits N · max pending N` and
   the last error; `probe --eval 'JSON.stringify(__pocketVault.stats())'`
   reads the same counters. A "64 requests already pending" there means some
