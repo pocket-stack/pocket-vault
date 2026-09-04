@@ -8,6 +8,7 @@ import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { $ } from "bun";
+import { BTN } from "../vendor/pocketjs/framework/src/input-api.ts";
 import { buildSimBundles, DECK_APP, ensureVault, openPanel, STAGE_APP, type Panel } from "./sim-panel.ts";
 import { ROOT } from "./paths.ts";
 
@@ -30,51 +31,48 @@ interface Cut {
 
 const CUTS: Cut[] = [
   {
-    name: "stage-fling",
-    app: STAGE_APP,
-    width: 400,
-    height: 240,
-    async play(stage) {
-      await stage.frames(8); // the list page arrives before a row can be selected
-      stage.store.select(0);
-      await stage.frames(12);
-      stage.store.scroller.beginDrag();
-      for (let i = 0; i < 6; i++) {
-        stage.store.scroller.drag(28);
-        await stage.frames(1);
-      }
-      stage.store.scroller.endDrag(2600);
-      await stage.frames(96);
-    },
-  },
-  {
     name: "deck-tour",
     app: DECK_APP,
     width: 320,
     height: 240,
     async play(deck) {
-      await deck.frames(10);
-      await deck.drag(160, 200, 120, 8); // scroll the list
-      await deck.frames(30);
-      await deck.tap(120, 116); // a note
       await deck.frames(12);
-      await deck.tap(120, 36); // Read
-      await deck.frames(16);
-      await deck.drag(180, 190, 90, 10); // trackpad swipe
-      await deck.frames(40);
-      await deck.drag(20, 60, 150, 24); // scrub the minimap
+      await deck.tap(30, 66); // open a folder in the tree
+      await deck.frames(14);
+      await deck.drag(70, 180, 120, 8); // scroll the tree
       await deck.frames(24);
-      await deck.tap(200, 36); // Outline
+      await deck.tap(200, 120); // open a note
       await deck.frames(20);
-      await deck.tap(120, 96); // a heading
+      await deck.drag(309, 60, 170, 20); // scrub the document from the strip
       await deck.frames(24);
-      await deck.tap(280, 36); // Edit
+      await deck.tap(205, 15); // Links
+      await deck.frames(24);
+      await deck.tap(60, 60); // jump to a heading
       await deck.frames(20);
-      for (const [x, y] of [[54, 133], [86, 133], [118, 133]] as const) {
-        await deck.tap(x, y);
-        await deck.frames(6);
+      await deck.tap(293, 15); // Tags
+      await deck.frames(20);
+      await deck.tap(40, 60); // filter by a tag
+      await deck.frames(24);
+      await deck.tap(120, 15); // back to Files
+      await deck.frames(20);
+    },
+  },
+  {
+    name: "stage-fling",
+    app: STAGE_APP,
+    width: 400,
+    height: 240,
+    async play(stage) {
+      await stage.frames(10);
+      stage.store.select(0);
+      await stage.frames(16);
+      stage.store.scroller.beginDrag();
+      for (let i = 0; i < 6; i++) {
+        stage.store.scroller.drag(30);
+        await stage.frames(1);
       }
-      await deck.frames(20);
+      stage.store.scroller.endDrag(2600);
+      await stage.frames(100);
     },
   },
   {
@@ -83,25 +81,63 @@ const CUTS: Cut[] = [
     width: 400,
     height: 240,
     async play(stage) {
-      await stage.frames(8);
+      await stage.frames(10);
       stage.store.select(0);
+      await stage.frames(16);
+      stage.store.scroller.scrollTo(150, { immediate: true });
       await stage.frames(12);
-      stage.store.scroller.scrollTo(160);
-      await stage.frames(24);
       stage.store.enterEdit();
-      await stage.frames(14);
+      await stage.frames(12);
       for (const ch of "Typed on a 3DS, laid out on a Mac. ") {
-        stage.store.type(ch);
+        stage.store.insert(ch);
+        await stage.frames(3);
+      }
+      await stage.frames(10);
+      // A heading appears on the frame its "## " is typed.
+      stage.store.insert("\n");
+      await stage.frames(8);
+      for (const ch of "## A heading, live") {
+        stage.store.insert(ch);
         await stage.frames(3);
       }
       await stage.frames(12);
-      for (let i = 0; i < 3; i++) {
-        stage.store.moveCaret(0, 1);
-        await stage.frames(10);
+      stage.store.setSelecting(true);
+      for (let i = 0; i < 14; i++) {
+        stage.store.moveCaret(-1, 0);
+        await stage.frames(2);
       }
-      await stage.frames(20);
+      await stage.frames(10);
+      stage.store.insert("one word");
+      await stage.frames(16);
+      stage.store.setSelecting(false);
       stage.store.leaveEdit();
-      await stage.frames(24);
+      await stage.frames(16);
+    },
+  },
+  {
+    name: "stage-menu",
+    app: STAGE_APP,
+    width: 400,
+    height: 240,
+    async play(stage) {
+      await stage.frames(10);
+      stage.store.select(0);
+      await stage.frames(16);
+      // Held L: the Vault menu drops from the left corner and the d-pad
+      // walks it.
+      for (let i = 0; i < 16; i++) await stage.frames(1, [], BTN.LTRIGGER);
+      for (let i = 0; i < 3; i++) {
+        await stage.frames(1, [], BTN.LTRIGGER | BTN.DOWN);
+        await stage.frames(10, [], BTN.LTRIGGER);
+      }
+      await stage.frames(6, [], 0);
+      // Held R: the Actions menu, from the right corner.
+      for (let i = 0; i < 16; i++) await stage.frames(1, [], BTN.RTRIGGER);
+      for (let i = 0; i < 2; i++) {
+        await stage.frames(1, [], BTN.RTRIGGER | BTN.DOWN);
+        await stage.frames(10, [], BTN.RTRIGGER);
+      }
+      await stage.frames(10, [], 0);
     },
   },
 ];

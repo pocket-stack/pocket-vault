@@ -1,31 +1,36 @@
-// app/keyboard.tsx — the deck's touch keyboard, the one Pocket Shell hand-
-// laid for the 320 px auxiliary panel: 32 px columns, 30 px rows, hit by the
-// deck's one gesture through `keyboardHit`. Shift is one-shot (the resistive
-// panel has one contact); "123" latches the symbol layer until "abc". The
-// echo strip above the keys shows the source line under the caret, raw.
+// app/keyboard.tsx — the deck's touch keyboard, hand-laid for the 320 px
+// auxiliary panel the way Pocket Shell's is: 31 px columns, 26 px rows, hit
+// by the deck's one gesture through `keyboardHit`. Four rows fit in 104 px,
+// which leaves the rest of the panel for the caret pad in edit mode and for
+// the results in search mode — so the keyboard takes a `top` and every hit
+// test takes the same one.
+//
+// Shift is one-shot (the resistive panel has one contact); "123" latches the
+// symbol layer until "abc". Styled as the iOS 6 keyboard: white gradient
+// keys, dark function keys, blue while pressed.
 
 import { createSignal, Index } from "solid-js";
 import { Text, View } from "@pocketjs/framework/components";
 import { onFrame } from "@pocketjs/framework/lifecycle";
-import type { KbLayer, VaultStore } from "./store.ts";
+import { DECK_W } from "./protocol.ts";
+import type { KbLayer } from "./store.ts";
+import * as T from "./theme.ts";
 
-export const KB_TOP = 48;
-export const KB_BOTTOM = 200;
-const ECHO_H = 26;
-const ROWS_TOP = KB_TOP + ECHO_H + 6;
-const KEY_H = 30;
-const UNIT = 32;
+export const KEY_PITCH = 26;
+export const KB_ROWS = 4;
+export const KB_H = KB_ROWS * KEY_PITCH + 4;
+const KEY_H = KEY_PITCH - 3;
+const UNIT = 31;
 const PRESS_FRAMES = 6;
 
 export type KeyAction =
   | { ch: string }
-  | { key: "enter" | "backspace" | "space" | "tab" }
-  | { layer: KbLayer }
-  | { done: true };
+  | { key: "enter" | "backspace" | "space" }
+  | { layer: KbLayer };
 
 interface KeyDef {
   label: string;
-  /** Width in 32 px units. */
+  /** Width in UNIT columns. */
   w: number;
   act: KeyAction;
   dark?: boolean;
@@ -47,7 +52,7 @@ const ROWS: Record<KbLayer, KeyDef[][]> = {
       { label: ",", w: 1, act: { ch: "," } },
       { label: "space", w: 4, act: { key: "space" } },
       { label: ".", w: 1, act: { ch: "." } },
-      { label: "enter", w: 2.5, act: { key: "enter" }, dark: true },
+      { label: "return", w: 2.5, act: { key: "enter" }, dark: true },
     ],
   ],
   upper: [
@@ -63,7 +68,7 @@ const ROWS: Record<KbLayer, KeyDef[][]> = {
       { label: "!", w: 1, act: { ch: "!" } },
       { label: "space", w: 4, act: { key: "space" } },
       { label: "?", w: 1, act: { ch: "?" } },
-      { label: "enter", w: 2.5, act: { key: "enter" }, dark: true },
+      { label: "return", w: 2.5, act: { key: "enter" }, dark: true },
     ],
   ],
   sym: [
@@ -79,15 +84,15 @@ const ROWS: Record<KbLayer, KeyDef[][]> = {
       { label: "[", w: 1, act: { ch: "[" } },
       { label: "space", w: 4, act: { key: "space" } },
       { label: "]", w: 1, act: { ch: "]" } },
-      { label: "enter", w: 2.5, act: { key: "enter" }, dark: true },
+      { label: "return", w: 2.5, act: { key: "enter" }, dark: true },
     ],
   ],
 };
 
-/** Left offset that centres a row's total width on the 320 px panel. */
+/** Left offset that centres a row's total width on the panel. */
 function rowStart(row: KeyDef[]): number {
-  const total = row.reduce((sum, k) => sum + k.w, 0) * UNIT;
-  return Math.round((320 - total) / 2);
+  const total = row.reduce((sum, key) => sum + key.w, 0) * UNIT;
+  return Math.round((DECK_W - total) / 2);
 }
 
 export interface KeyHit {
@@ -96,12 +101,9 @@ export interface KeyHit {
   index: number;
 }
 
-export function keyboardHit(x: number, y: number, layer: KbLayer): KeyHit | null {
-  if (y >= KB_TOP && y < KB_TOP + ECHO_H) {
-    return x >= 320 - 52 ? { act: { done: true }, row: -1, index: 0 } : null;
-  }
-  const row = Math.floor((y - ROWS_TOP) / KEY_H);
-  if (row < 0 || row >= 4) return null;
+export function keyboardHit(x: number, y: number, layer: KbLayer, top: number): KeyHit | null {
+  const row = Math.floor((y - top - 2) / KEY_PITCH);
+  if (row < 0 || row >= KB_ROWS) return null;
   const keys = ROWS[layer][row]!;
   let left = rowStart(keys);
   for (let index = 0; index < keys.length; index++) {
@@ -112,43 +114,32 @@ export function keyboardHit(x: number, y: number, layer: KbLayer): KeyHit | null
   return null;
 }
 
-export function Keyboard(props: { store: VaultStore; pressed: () => KeyHit | null; echo: () => string; doneLabel: string }) {
-  const store = props.store;
-  const rows = () => ROWS[store.kbLayer()];
+export function Keyboard(props: { layer: KbLayer; pressed: () => KeyHit | null; top: number }) {
+  const rows = () => ROWS[props.layer];
   return (
-    <View debugName="Keyboard" class="absolute left-0 right-0" style={{ insetT: KB_TOP, height: KB_BOTTOM - KB_TOP }}>
-      <View class="absolute left-[6] top-[2] h-[22] bg-[#1f1d2e] border border-[#26233a] overflow-hidden" style={{ width: 320 - 12 - 52 }}>
-        <Text class="absolute left-[6] top-[4] font-mono text-xs text-[#e0def4]">{props.echo()}</Text>
-      </View>
-      <View class="absolute top-[2] h-[22] items-center justify-center rounded-[3] bg-[#26233a]" style={{ insetL: 320 - 52, width: 46 }}>
-        <Text class="text-xs text-[#c4a7e7]">{props.doneLabel}</Text>
-      </View>
+    <View debugName="Keyboard" class={T.KEYBOARD_BG} style={{ insetT: props.top, height: KB_H }}>
       <Index each={rows()}>
         {(row, r) => (
           <Index each={row()}>
             {(key, i) => {
               const left = () => rowStart(row()) + row().slice(0, i).reduce((sum, k) => sum + k.w, 0) * UNIT;
               const hot = () => {
-                const p = props.pressed();
-                return p !== null && p.row === r && p.index === i;
+                const press = props.pressed();
+                return press !== null && press.row === r && press.index === i;
               };
               return (
                 <View
-                  class={
-                    hot()
-                      ? "absolute items-center justify-center rounded-[3] bg-[#c4a7e7]"
-                      : key().dark
-                        ? "absolute items-center justify-center rounded-[3] bg-[#26233a]"
-                        : "absolute items-center justify-center rounded-[3] bg-[#393552]"
-                  }
+                  class={hot() ? T.KEY_HOT : key().dark ? T.KEY_DARK : T.KEY}
                   style={{
                     insetL: left() + 2,
-                    insetT: ECHO_H + 6 + r * KEY_H + 2,
+                    insetT: 2 + r * KEY_PITCH,
                     width: key().w * UNIT - 4,
-                    height: KEY_H - 4,
+                    height: KEY_H,
                   }}
                 >
-                  <Text class={hot() ? "text-sm text-[#191724] font-bold" : "text-sm text-[#e0def4]"}>{key().label}</Text>
+                  <Text class={hot() ? T.KEY_TEXT_HOT : key().dark ? T.KEY_TEXT_DARK : T.KEY_TEXT}>
+                    {key().label}
+                  </Text>
                 </View>
               );
             }}

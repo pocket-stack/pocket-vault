@@ -9,6 +9,9 @@ import { mkdirSync, writeFileSync, existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 const dir = process.argv[2] ?? "vault";
+/** The vault's shape, so the folder tree, the tags and the backlinks have
+ *  something real to show. */
+const FOLDERS = ["00 Inbox", "01 Projects", "01 Projects/PocketJS", "02 Areas", "03 Resources", "Templates"];
 const count = Number(process.argv[3] ?? 1000);
 const minBytes = Number(process.argv[4] ?? 100) * 1024;
 
@@ -87,7 +90,8 @@ function block(depth: number): string {
 }
 
 mkdirSync(dir, { recursive: true });
-if (readdirSync(dir).length > 0 && !process.argv.includes("--force")) {
+for (const folder of FOLDERS) mkdirSync(join(dir, folder), { recursive: true });
+if (readdirSync(dir).filter((entry) => entry.endsWith(".md")).length > 0 && !process.argv.includes("--force")) {
   console.error(`${dir} is not empty; pass --force to overwrite`);
   process.exit(1);
 }
@@ -98,6 +102,12 @@ for (let i = 1; i <= count; i++) {
     `---\ntitle: ${title}\ntags: [${pick(TOPICS).split(" ")[0]}, ${pick(TOPICS).split(" ")[0]}]\ncreated: 2026-${String(int(1, 9)).padStart(2, "0")}-${String(int(1, 28)).padStart(2, "0")}\n---`,
     `# ${title}`,
     paragraph(),
+    `> Focus: ${sentence()}`,
+    `> ${sentence()}`,
+    "",
+    `- [${rnd() < 0.5 ? "x" : " "}] ${sentence()}`,
+    `- [ ] ${sentence()}`,
+    `See also [[${slug(pick(TOPICS))}-${int(1, count)}]] and #${pick(TOPICS).split(" ")[0]}.`,
   ];
   let bytes = parts.join("\n\n").length;
   let section = 0;
@@ -109,7 +119,8 @@ for (let i = 1; i <= count; i++) {
     bytes = parts.reduce((a, p) => a + p.length + 2, 0);
   }
   const body = parts.join("\n\n") + "\n";
-  writeFileSync(join(dir, `${slug(title)}.md`), body);
+  const folder = i % 7 === 0 ? "" : FOLDERS[i % FOLDERS.length]!;
+  writeFileSync(join(dir, folder, `${slug(title)}.md`), body);
   total += body.length;
 }
 console.log(`${count} notes, ${(total / 1024 / 1024).toFixed(1)} MiB in ${dir}`);
