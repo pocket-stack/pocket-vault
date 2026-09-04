@@ -47,7 +47,12 @@ export const DOT_ABSENT = "absolute w-[8] h-[8] rounded-full bg-[#e46a6a] border
 // ── Segmented control (the mode tabs) ──────────────────────────────────────
 export const SEG = "absolute h-[22] rounded-[5] border border-[#7c7c82] bg-gradient-to-b from-[#fbfbfb] to-[#dedede] overflow-hidden";
 export const SEG_ITEM = "absolute top-0 h-[20] items-center justify-center";
+/** The selected segment. Corner radii are per node, not per corner, so an
+ *  end segment is a rounded block plus a square patch on its inner side,
+ *  which keeps the outer corner inside the track's own radius. */
 export const SEG_ITEM_ON = "absolute top-0 h-[20] items-center justify-center bg-gradient-to-b from-[#5b9bf3] to-[#2b6fd6]";
+export const SEG_ITEM_ON_END = "absolute top-0 h-[20] items-center justify-center rounded-[4] bg-gradient-to-b from-[#5b9bf3] to-[#2b6fd6]";
+export const SEG_ITEM_ON_PATCH = "absolute top-0 h-[20] w-[6] bg-gradient-to-b from-[#5b9bf3] to-[#2b6fd6]";
 export const SEG_TEXT = "text-xs text-[#3c3c3c] font-bold";
 export const SEG_TEXT_ON = "text-xs text-white font-bold";
 export const SEG_DIVIDER = "absolute top-0 w-[1] h-[20] bg-[#a9a9ae]";

@@ -287,7 +287,13 @@ export function Deck(props: { store: VaultStore }) {
         <For each={TABS}>
           {(tab, i) => (
             <>
-              <View class={tabOn(tab.mode) ? T.SEG_ITEM_ON : T.SEG_ITEM} style={{ insetL: i() * (SEG_W / 4), width: SEG_W / 4 }}>
+              <Show when={tabOn(tab.mode) && (i() === 0 || i() === TABS.length - 1)}>
+                <View class={T.SEG_ITEM_ON_PATCH} style={{ insetL: i() === 0 ? SEG_W / 4 - 6 : i() * (SEG_W / 4) }} />
+              </Show>
+              <View
+                class={tabOn(tab.mode) ? (i() === 0 || i() === TABS.length - 1 ? T.SEG_ITEM_ON_END : T.SEG_ITEM_ON) : T.SEG_ITEM}
+                style={{ insetL: i() * (SEG_W / 4), width: SEG_W / 4 }}
+              >
                 <Text class={tabOn(tab.mode) ? T.SEG_TEXT_ON : T.SEG_TEXT}>{tab.label}</Text>
               </View>
               <Show when={i() > 0}>
