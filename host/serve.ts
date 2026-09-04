@@ -1,61 +1,74 @@
 // host/serve.ts — the Pocket Vault companion. Runs on the Mac beside the
-// vault folder; the 3DS finds it over the LAN and asks it for pages of
-// titles, laid-out rows of a note, and edits. Everything a guest must not
-// do on its own thread happens here: the SQLite index, full-text search,
-// file reads and writes, and the line breaking that turns a 100 KB note
-// into rows the console paints as given.
+// vault folder; the 3DS finds it over the LAN and asks it for a folder's
+// children, a page of notes, a note's laid-out rows, its links, its tags, and
+// edits. Everything a guest must not do on its own thread happens here: the
+// SQLite index, full-text search, file reads and writes, and the line
+// breaking that turns a 100 KB note into rows the console paints as given.
 //
 //   bun run companion [--vault ./vault] [--unicast <3ds-ip>] [--port 8622]
-//                     [--no-beacon] [--name "evan's Mac"] [--memory]
+//                     [--no-beacon] [--memory]
 //
 // Method by method (app/protocol.ts):
-//   vault.list   a page of notes, by title or by search rank
-//   doc.open     layout summary: row kinds, density map, revision
-//   doc.rows     one window of rows under the current revision
-//   doc.outline  headings with the rows they start
-//   doc.focus    show one line raw for editing (Obsidian's live preview)
-//   doc.edit     replace a source range (insert, delete, split, join) under a
-//                per-session sequence number; the file is written 400 ms
-//                after the last edit
-//   doc.save     write now
+//   vault.tree     one folder's subfolders (with counts) and notes
+//   vault.list     a page of notes, by folder, by tag, or by search rank
+//   vault.tags     every tag with its note count
+//   vault.create   a new note; vault.mkdir a new folder; vault.delete to trash
+//   doc.open       layout summary: row kinds, density map, revision
+//   doc.rows       one window of rows under the current revision
+//   doc.line       one source line, for a guest with no rows for it yet
+//   doc.outline    headings with the rows they start
+//   doc.links      outgoing wiki links and backlinks
+//   doc.edit       replace a source range under a per-session sequence number
+//   doc.task       flip a checkbox
+//   doc.save       write now (a dirty note is also written 400 ms after the
+//                  last edit)
 // Event `vault.changed` announces a new index version after the folder
-// changed on disk; the guest re-queries its list.
+// changed on disk; the guest re-queries its tree and its list.
 
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { createCompanionHost, type CompanionContext } from "../vendor/pocketjs/tools/companion-host.ts";
 import { serveCompanion } from "../vendor/pocketjs/tools/companion-serve.ts";
 import {
   PAGE_ROWS,
   VAULT_APP,
+  type CreateParams,
   type DocInfo,
   type EditParams,
-  type FocusParams,
+  type LineParams,
+  type LineResult,
+  type LinksResult,
   type ListParams,
   type ListResult,
+  type MkdirParams,
   type OpenParams,
   type OutlineItem,
   type Patch,
   type RowsParams,
   type RowsResult,
+  type TagItem,
+  type TreeParams,
+  type TreeResult,
 } from "../app/protocol.ts";
 import { VaultIndex } from "./index.ts";
 import {
   docInfo,
+  docLinks,
   docTitle,
-  focusLine,
   layoutDoc,
   Metrics,
   outline,
   replaceRange,
   rowsOf,
   sourceText,
+  toggleTask,
   type Laid,
 } from "./layout.ts";
 
 const SAVE_DEBOUNCE_MS = 400;
 const OPEN_DOCS = 8;
 const MAX_ROWS_PER_REPLY = PAGE_ROWS * 4;
+const MAX_NOTE_BYTES = 4 * 1024 * 1024;
 
 export interface VaultServiceOptions {
   vault: string;
@@ -63,8 +76,8 @@ export interface VaultServiceOptions {
   log?: (line: string) => void;
 }
 
-/** The companion's methods over an index and a layout cache, with no
- *  network in it — tests drive this through the sim pair. */
+/** The companion's methods over an index and a layout cache, with no network
+ *  in it — tests drive this through the sim pair. */
 export function createVaultService(options: VaultServiceOptions) {
   const log = options.log ?? ((line: string) => console.error(line));
   const index = new VaultIndex(options.vault, { memory: options.memory ?? false });
@@ -75,21 +88,23 @@ export function createVaultService(options: VaultServiceOptions) {
   const lastEdits = new Map<string, { seq: number; patch: Patch }>();
 
   const load = (id: number): Laid => {
-    let doc = open.get(id);
-    if (doc) {
+    const cached = open.get(id);
+    if (cached) {
       open.delete(id);
-      open.set(id, doc); // most recent last
-      return doc;
+      open.set(id, cached); // most recent last
+      return cached;
     }
     const note = index.note(id);
     if (!note) throw new Error(`no note ${id}`);
+    if (note.size > MAX_NOTE_BYTES) throw new Error(`${note.path} is over 4 MiB`);
     const path = index.absolute(note);
-    const text = Bun.file(path).size > 4 * 1024 * 1024 ? null : require("node:fs").readFileSync(path, "utf8");
-    if (text === null) throw new Error(`${note.path} is over 4 MiB`);
     const started = performance.now();
-    doc = layoutDoc(metrics, id, path, text);
+    const doc = layoutDoc(metrics, id, note.path, readFileSync(path, "utf8"), path);
     titles.set(id, docTitle(doc, note.title));
-    log(`vault: laid out ${note.path}: ${doc.lines.length} lines → ${doc.rows.length} rows in ${(performance.now() - started).toFixed(0)} ms`);
+    log(
+      `vault: laid out ${note.path}: ${doc.lines.length} lines → ${doc.rows.length} rows in ` +
+        `${(performance.now() - started).toFixed(0)} ms`,
+    );
     open.set(id, doc);
     while (open.size > OPEN_DOCS) {
       const [oldest, victim] = open.entries().next().value as [number, Laid];
@@ -108,7 +123,7 @@ export function createVaultService(options: VaultServiceOptions) {
     }
     if (!doc.dirty) return;
     const text = sourceText(doc);
-    writeFileSync(doc.path, text);
+    writeFileSync(doc.file, text);
     index.touch(doc.id, text);
     doc.dirty = false;
     log(`vault: saved ${doc.path} (${text.length} bytes)`);
@@ -122,10 +137,48 @@ export function createVaultService(options: VaultServiceOptions) {
 
   const title = (doc: Laid): string => titles.get(doc.id) ?? docTitle(doc, String(doc.id));
 
+  /** After an edit the title may have moved with the H1. */
+  const retitle = (doc: Laid): void => {
+    titles.set(doc.id, docTitle(doc, index.note(doc.id)?.title ?? title(doc)));
+  };
+
   const methods = {
+    "vault.tree": (params: TreeParams): TreeResult => {
+      const folder = params.folder ?? "";
+      return { folder, entries: index.tree(folder) };
+    },
     "vault.list": (params: ListParams): ListResult => {
-      const page = index.list(params.q, params.offset ?? 0, params.limit ?? 24);
+      const page = index.list(
+        {
+          ...(params.q === undefined ? {} : { q: params.q }),
+          ...(params.folder === undefined ? {} : { folder: params.folder }),
+          ...(params.tag === undefined ? {} : { tag: params.tag }),
+        },
+        params.offset ?? 0,
+        params.limit ?? 24,
+      );
       return { ...page, version: index.currentVersion() };
+    },
+    "vault.tags": (): TagItem[] => index.tags(),
+    "vault.create": (params: CreateParams): { id: number; path: string } => {
+      const made = index.create(params.folder ?? "", params.title, params.body);
+      log(`vault: created ${made.path}`);
+      return made;
+    },
+    "vault.mkdir": (params: MkdirParams): { path: string } => {
+      const made = index.mkdir(params.folder ?? "", params.name);
+      log(`vault: created folder ${made.path}`);
+      return made;
+    },
+    "vault.delete": (params: OpenParams): { deleted: boolean } => {
+      const note = index.note(params.id);
+      const deleted = index.remove(params.id);
+      if (deleted) {
+        open.delete(params.id);
+        titles.delete(params.id);
+        log(`vault: moved ${note?.path ?? params.id} to .trash`);
+      }
+      return { deleted };
     },
     "doc.open": (params: OpenParams): DocInfo => {
       const doc = load(params.id);
@@ -137,10 +190,18 @@ export function createVaultService(options: VaultServiceOptions) {
       const count = Math.min(MAX_ROWS_PER_REPLY, Math.max(0, params.count));
       return { from: params.from, rev: doc.rev, rows: rowsOf(doc, params.from, count) };
     },
-    "doc.outline": (params: OpenParams): OutlineItem[] => outline(load(params.id)),
-    "doc.focus": (params: FocusParams): Patch => {
+    "doc.line": (params: LineParams): LineResult => {
       const doc = load(params.id);
-      return focusLine(metrics, doc, params.line, title(doc));
+      const line = Math.max(0, Math.min(doc.lines.length - 1, params.line));
+      return { line, text: doc.lines[line] ?? "", rev: doc.rev };
+    },
+    "doc.outline": (params: OpenParams): OutlineItem[] => outline(load(params.id)),
+    "doc.links": (params: OpenParams): LinksResult => {
+      const doc = load(params.id);
+      return {
+        out: docLinks(doc).map((link) => ({ title: link.target, id: index.resolve(link.target), line: link.line })),
+        back: index.backlinks(params.id).map((note) => ({ title: note.title, id: note.id })),
+      };
     },
     "doc.edit": (params: EditParams, context: CompanionContext): Patch => {
       const doc = load(params.id);
@@ -157,7 +218,14 @@ export function createVaultService(options: VaultServiceOptions) {
       const patch = replaceRange(metrics, doc, params.from, params.to, params.text, title(doc));
       patch.seq = params.seq;
       lastEdits.set(key, { seq: params.seq, patch });
-      titles.set(doc.id, docTitle(doc, index.note(doc.id)?.title ?? title(doc)));
+      retitle(doc);
+      scheduleSave(doc);
+      return patch;
+    },
+    "doc.task": (params: LineParams): Patch => {
+      const doc = load(params.id);
+      const patch = toggleTask(metrics, doc, params.line, title(doc));
+      retitle(doc);
       scheduleSave(doc);
       return patch;
     },
@@ -186,7 +254,10 @@ export function createVaultService(options: VaultServiceOptions) {
 
   const started = performance.now();
   const changed = index.sync();
-  log(`vault: ${index.count()} notes in ${options.vault} (${changed} read) in ${(performance.now() - started).toFixed(0)} ms`);
+  log(
+    `vault: ${index.count()} notes in ${options.vault} (${changed} read) in ` +
+      `${(performance.now() - started).toFixed(0)} ms`,
+  );
   index.onChange((version) => {
     log(`vault: folder changed → index v${version}`);
     host.publish("vault.changed", { version });

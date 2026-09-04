@@ -57,62 +57,89 @@ phone for a watch, or the device itself for its own shell.
 
 ## What the console does
 
-**Top screen (400×240)** — the note. Rows are mounted only within 40 px of
-the viewport, keyed by index, inside one canvas that moves by the scroller's
-offset. Fling, rubber band and settle come from `@pocketjs/framework/kinetics`,
-the same scroller as the 3DS contacts demo. Rows are fetched a page (32 rows)
-at a time; the wanted pages are the ones under the viewport now and the ones
-under where a fling is heading a quarter second later, so rows are there
-when it lands. A page request stays in flight while its page is wanted and
-is cancelled the moment it is not.
+**The navigation bar** carries the two buttons the console actually has: `L
+Vault` on the left and `Actions R` on the right, each a plain pill with its
+letter. **Tap a shoulder to turn a page; hold it to drop that menu** under
+its own corner, where the d-pad walks it and A runs an item — and the same
+menu appears on the touch screen as big rows, so a stylus can pick what the
+d-pad picks. The left button is deliberately not an arrow: it opens the
+vault's menu, it does not go back one step.
 
-**Bottom screen (320×240)** — the deck, in the Aqua / iOS 6 register the
-console's LCD shows well (`app/theme.ts` holds every colour and control
-shape as class-string tokens). It borrows two ideas from other PocketJS
-companions. From Pocket Shell's 3DS app: a segmented control that follows
-the state of the top screen, and a **minimap** of the whole note (96 density
-buckets computed by the companion) with the viewport drawn on it — tap or
-drag to jump. From the iPod deck: a **trackpad** whose pan scrolls the
-screen above it with the finger's velocity carried into the fling. In edit
-mode the deck is a four-row keyboard over a **caret pad**: a pan moves the
-caret by character and row; the **Select** toggle beside it turns the same
-pan (and the d-pad) into a drag-select. **Info** in the navigation bar opens
-a sheet with the companion's name, the link state, the note count, the open
-note's size and the last error.
+**Top screen (400×240)** — the note, WYSIWYG in the Bear/Typora sense.
+Markdown renders styled and its **syntax markers stay on screen, dimmed**: a
+heading keeps its `#`, a wiki link keeps its `[[`, a code span keeps its
+backticks. Bullets and checkboxes are drawn instead of spelled, and a run of
+quote lines reads as one bordered callout. Rows are mounted only within 40 px
+of the viewport, inside one canvas that moves by the scroller's offset; fling,
+rubber band and settle come from `@pocketjs/framework/kinetics`, the same
+scroller as the 3DS contacts demo. Rows are fetched a page (32 rows) at a
+time; the wanted pages are the ones under the viewport now and the ones under
+where a fling is heading a quarter second later, so rows are there when it
+lands. At most eight page requests are in flight and three are issued per
+frame, whatever the viewport does.
 
-| Input | Files / Search | Read | Outline | Edit |
-|---|---|---|---|---|
-| tap list row | open the note | | jump to heading | |
-| tap search field | keyboard | | | |
-| trackpad pan | | scroll (fling on release) | | |
-| trackpad hold | | edit here | | |
-| minimap tap/drag | | jump | | |
-| caret pad pan | | | | move the caret (Select on: extend the selection) |
-| d-pad ↑↓ | list | scroll | scroll | caret row |
-| d-pad ←→ | | | | caret column |
-| L / R | | page up / down | | |
-| A | open selected | | | |
-| B | | back to Files | back to Read | done |
-| X | | edit | | toggle Select |
-| Y | | outline | back | |
-| START | | save | | save |
+Keeping the markers visible is not a shortcut — it is what makes the
+source-to-screen mapping **total**. Every source character has a position on
+screen, so the caret can live on a styled row, a tap resolves to a source
+column, and the guest can read any cached line back exactly. That last part
+is what lets it edit locally. The three substitutions that break the
+one-to-one rule — a bullet, a checkbox, a hidden `>` — carry the source text
+they stand for, and the caret snaps across them.
 
-**Editing is local first.** The guest owns the line under the caret: it
-holds that line's raw text, applies a keystroke to it and re-breaks it on
-the same frame with the companion's own wrapping rules over the atlas's own
-advances (`app/wrap.ts`), then queues the edit. One edit is in flight at a
-time and queued keystrokes coalesce into it, so a burst of typing is one
-request; the companion's patch confirms rows the guest already shows and
-moves everything else. Offline, the line keeps accepting keystrokes and the
-queue drains on reconnect; a per-session sequence number makes a re-sent
-edit idempotent. An edit that changes the line structure — return,
-backspace at column 0, a selection across lines — waits for its patch, and
-keystrokes typed meanwhile are replayed after it. The active line is shown
-as raw markdown (Obsidian's live preview); moving onto another line swaps
-which line is raw (`doc.focus`), once the queue has drained. The companion
-writes the file 400 ms after the last edit and on START or Save; the folder
-is watched, so a change made in Obsidian on the Mac bumps the index version
-and the list re-queries.
+**Bottom screen (320×240)** — two panes under a segmented control, the shape
+a file browser has had since Aqua: the left pane is an index, the right pane
+is what that index points at.
+
+| Tab | Left pane | Right pane |
+|---|---|---|
+| Files | the folder tree, with note counts | notes in the selected folder |
+| Links | the note's outline | its outgoing wiki links, then its backlinks |
+| Tags | every tag with its count | notes carrying the selected tag |
+
+A strip down the right edge is the document's scrubber — the note's density
+map with the viewport drawn on it — so the untouchable top screen keeps a
+touch path. Under the panes: settings, New Note, New Folder, delete (a delete
+moves the note to the vault's `.trash`, which is what an editor owes a folder
+it does not own). The magnifier opens search: a field, the results, and the
+keyboard. Every colour and control shape is a token in `app/theme.ts`, in the
+Aqua / iOS 6 register the console's LCD shows well.
+
+**Editing** replaces the deck with a four-row keyboard over a **caret pad**:
+a pan moves the caret by character and by row, and the **Select** toggle
+beside it turns the same pan — and the d-pad — into a drag-select.
+
+| Input | Browse | Edit |
+|---|---|---|
+| tap a tree row | open a folder, or a note | |
+| tap a note row | open the note | |
+| drag the strip | scrub the document | |
+| pan the caret pad | | move the caret (Select on: extend the selection) |
+| tap L / tap R | page back / forward | page back / forward |
+| hold L / hold R | the Vault menu / the Actions menu | the same |
+| d-pad up/down | scroll | caret row |
+| d-pad left/right | | caret column |
+| A | run the open menu's item | |
+| B | | done |
+| X | edit | toggle Select |
+| Y | outline and links | |
+| START | save | save |
+
+**Editing is local first.** The guest holds the caret line's source text. A
+character, a delete, a return and a backspace-at-column-0 all apply to that
+text and re-break the affected lines **on the same frame**, with the shared
+wrapper (`app/linewrap.ts`) over the same advances the companion sums — so
+the screen is right before the request goes out. Joining needs the line
+above, which the guest reconstructs from that line's rows, because the
+mapping is total. One edit is in flight at a time and queued keystrokes
+coalesce into it; offline, the line keeps accepting keystrokes and the queue
+drains on reconnect. A per-session sequence number makes a re-sent edit
+idempotent. When a patch for an edit the guest already applied comes back,
+the guest adopts the companion's rows **for the lines that patch laid out**,
+one line at a time: replacing a line in place is idempotent, so whatever the
+guest guessed gives way to the authority without disturbing any other row.
+The companion writes the file 400 ms after the last edit and on START or
+Save; the folder is watched, so a change made in Obsidian on the Mac bumps
+the index version and the panes re-query.
 
 ## The companion
 
@@ -120,18 +147,24 @@ and the list re-queries.
 
 | Method | Returns |
 |---|---|
-| `vault.list {q?, offset, limit}` | a page of `{id, title, size}` by title, or by FTS5 rank when `q` is given |
-| `doc.open {id}` | `{rows, lines, kinds, map, rev, title}` — one kind digit per row, 96 density digits |
-| `doc.rows {id, from, count, rev}` | rows `{k, l, s, r: [[x, text, style]…]}` for that revision |
-| `doc.outline {id}` | `[{row, level, text}]` |
-| `doc.focus {id, line}` | a patch: spans of replaced rows, new total, new map, caret, the raw line's text |
-| `doc.edit {id, seq, from: [line, col], to: [line, col], text}` | a patch; `seq` repeats are answered from cache, not applied twice |
+| `vault.tree {folder}` | that folder's subfolders with note counts, then its notes |
+| `vault.list {q?, folder?, tag?, offset, limit}` | a page of `{id, title, snippet, size, mtime}` by title, or by FTS5 rank |
+| `vault.tags {}` | `[{tag, count}]` |
+| `vault.create {folder, title}` · `vault.mkdir` · `vault.delete` | a new note, a new folder, a note moved to `.trash` |
+| `doc.open {id}` | `{rows, lines, kinds, map, rev, title, path}` — one kind digit per row, 96 density digits |
+| `doc.rows {id, from, count, rev}` | rows `{k, l, s, r: [[x, text, style, sourceColumn, sourceText?]…]}` |
+| `doc.line {id, line}` | one source line, for a guest with no rows for it yet |
+| `doc.outline {id}` · `doc.links {id}` | headings with their rows; outgoing links and backlinks |
+| `doc.edit {id, seq, from: [line, col], to: [line, col], text}` | a patch: spans of replaced rows, the new total, the new map, the caret and its line's text. `seq` repeats are answered from cache, not applied twice |
+| `doc.task {id, line}` | a patch that flips a checkbox |
 | `doc.save {id}` | `{saved}` |
 
 Event `vault.changed {version}` follows a change on disk. The index lives in
 `<vault>/.pocket-vault/index.sqlite` and re-reads only notes whose size or
 mtime moved; a thousand 110 KB notes index in about 1.5 s cold and 5 ms warm.
-Laying out a 117 KB note takes ~19 ms; a 32-row page is ~2.7 KB on the wire.
+Laying out a 117 KB note takes ~20 ms; a 32-row page is a few KB on the wire.
+Extraction for the index never measures text — it runs over the per-line
+kinds — which is why a thousand notes index in seconds rather than minutes.
 
 ## The loop
 

@@ -41,9 +41,9 @@ export interface Panel {
   readonly width: number;
   readonly height: number;
   readonly store: VaultStore;
-  /** Run n frames with the given contacts held; replies land one frame after
-   *  they are asked for, as on the console. */
-  frames(n: number, touches?: number[]): Promise<void>;
+  /** Run n frames with the given contacts and buttons held; replies land one
+   *  frame after they are asked for, as on the console. */
+  frames(n: number, touches?: number[], buttons?: number): Promise<void>;
   tap(x: number, y: number): Promise<void>;
   /** A finger travelling from y0 to y1 at x over `steps` frames, released. */
   drag(x: number, y0: number, y1: number, steps: number): Promise<void>;
@@ -70,9 +70,9 @@ export async function openPanel(app: string, width: number, height: number, vaul
   const store = (globalThis as { __pocketVault?: VaultStore }).__pocketVault;
   if (!store) throw new Error(`${app} did not publish its store`);
   let sink: Uint8Array[] | null = null;
-  const frames = async (n: number, touches: number[] = []): Promise<void> => {
+  const frames = async (n: number, touches: number[] = [], buttons = 0): Promise<void> => {
     for (let i = 0; i < n; i++) {
-      world.frame(0, undefined, touches);
+      world.frame(buttons, undefined, touches);
       pair.tick();
       await Promise.resolve();
       await Promise.resolve();
