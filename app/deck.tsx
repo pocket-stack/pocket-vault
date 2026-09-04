@@ -58,7 +58,7 @@ const SIDE_BTN_H = 19;
 const SEG_X = 6;
 const SEG_W = DECK_W - 12;
 const SHEET_W = 280;
-const SHEET_H = 172;
+const SHEET_H = 194;
 const SHEET_X = (DECK_W - SHEET_W) / 2;
 const SHEET_Y = (DECK_H - SHEET_H) / 2;
 
@@ -469,6 +469,10 @@ function Sheet(props: { store: VaultStore }) {
       {row("Notes", () => String(store.listTotal()), 2)}
       {row("Open note", () => (store.doc() ? `${store.doc()!.rows} rows · rev ${store.doc()!.rev}` : "none"), 3)}
       {row("Last error", () => store.lastError() ?? "none", 4)}
+      {row("Requests", () => {
+        const st = store.stats();
+        return `rows ${st.requests["doc.rows"] ?? 0} · edits ${st.requests["doc.edit"] ?? 0} · max pending ${st.maxPending}`;
+      }, 5)}
       <View class={T.BUTTON} style={{ insetL: 14, insetT: SHEET_H - 26, width: SHEET_W / 2 - 20, height: 20 }}>
         <Text class={T.BUTTON_TEXT}>Save now</Text>
       </View>

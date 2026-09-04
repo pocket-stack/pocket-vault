@@ -72,6 +72,18 @@ const PAGE_PX = STAGE_H - 36;
 /** A page that was asked for and still has holes is asked again no sooner
  *  than this many frames later. */
 const PAGE_RETRY_FRAMES = 30;
+/** Hard bounds on the pager, whatever its logic decides: pages in flight at
+ *  once, and new page requests per frame. */
+const PAGES_INFLIGHT_MAX = 8;
+const PAGES_PER_FRAME_MAX = 3;
+
+/** Request counters by method, for the Info sheet and the dev wire. */
+export interface LinkStats {
+  requests: Record<string, number>;
+  replies: number;
+  errors: number;
+  maxPending: number;
+}
 
 interface EditOp {
   from: Pos;
@@ -134,6 +146,7 @@ export interface VaultStore {
   // ── the status & settings sheet ──
   sheetOpen: Accessor<boolean>;
   setSheetOpen(open: boolean): void;
+  stats(): LinkStats;
 
   /** Once per frame, before anything reads the scroller. */
   frame(buttons: number): void;
@@ -220,6 +233,12 @@ export function createVaultStore(ops?: CompanionOps | null): VaultStore {
     setError(error instanceof Error ? error.message : String(error));
   };
 
+  const stats: LinkStats = { requests: {}, replies: 0, errors: 0, maxPending: 0 };
+  const count = (method: string): void => {
+    stats.requests[method] = (stats.requests[method] ?? 0) + 1;
+    stats.maxPending = Math.max(stats.maxPending, mac.core.pendingCount());
+  };
+
   // ── editing state (declared early: the row pump consults it) ─────────────
   const [caret, setCaret] = createSignal<Caret | null>(null);
   const [anchor, setAnchor] = createSignal<Caret | null>(null);
@@ -252,6 +271,7 @@ export function createVaultStore(ops?: CompanionOps | null): VaultStore {
    *  slow link outruns the replies and hits the companion's pending cap. */
   const pageAsked = new Map<number, number>();
   let frameCount = 0;
+  let lastResync = -1000;
   const pageMissing = (page: number, total: number): boolean => {
     const from = page * PAGE_ROWS;
     const to = Math.min(total, from + PAGE_ROWS);
@@ -262,11 +282,22 @@ export function createVaultStore(ops?: CompanionOps | null): VaultStore {
     const from = page * PAGE_ROWS;
     const rev = d.rev;
     pageAsked.set(page, frameCount);
+    count("doc.rows");
     let id: number;
     try {
       id = mac.core.request("doc.rows", { id: d.id, from, count: PAGE_ROWS, rev }, (body) => {
       inflightPages.delete(page);
-      if (!("ok" in body)) return;
+      stats.replies += 1;
+      if (!("ok" in body)) {
+        stats.errors += 1;
+        // The companion's revision moved on without us (it restarted, or a
+        // patch was lost): read the summary again to resynchronise.
+        if (body.err.includes("stale revision") && frameCount - lastResync > 60) {
+          lastResync = frameCount;
+          info.refetch();
+        }
+        return;
+      }
       const result = body.ok as RowsResult;
       const current = doc();
       if (!current || current.id !== d.id || result.rev !== current.rev) return;
@@ -329,11 +360,14 @@ export function createVaultStore(ops?: CompanionOps | null): VaultStore {
     // companion's; a page fetched now would land off by the rows the local
     // line gained or lost. Pages resume once the patches have caught up.
     if (unconfirmed() > 0) return;
+    let issued = 0;
     for (const page of wanted) {
+      if (issued >= PAGES_PER_FRAME_MAX || inflightPages.size >= PAGES_INFLIGHT_MAX) break;
       if (page < 0 || page > lastAll || inflightPages.has(page) || !pageMissing(page, d.rows)) continue;
       const asked = pageAsked.get(page);
       if (asked !== undefined && frameCount - asked < PAGE_RETRY_FRAMES) continue;
       requestPage(d, page);
+      issued += 1;
     }
   });
 
@@ -472,6 +506,7 @@ export function createVaultStore(ops?: CompanionOps | null): VaultStore {
     const d = doc();
     if (!d) return;
     blocked = true;
+    count("doc.focus");
     mac.call<Patch>("doc.focus", { id: d.id, line }).then(
       (patch) => {
         blocked = false;
@@ -526,6 +561,7 @@ export function createVaultStore(ops?: CompanionOps | null): VaultStore {
       if (op.structural) replayDeferred();
       flush();
     };
+    count("doc.edit");
     mac.call<Patch>("doc.edit", { id: d.id, seq, from: op.from, to: op.to, text: op.text }).then(
       (patch) => settle(patch),
       (error) => settle(null, error),
@@ -824,6 +860,7 @@ export function createVaultStore(ops?: CompanionOps | null): VaultStore {
     },
     sheetOpen,
     setSheetOpen,
+    stats: () => stats,
     frame,
   };
   return store;

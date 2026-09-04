@@ -80,6 +80,17 @@ needs the console back at the Homebrew Launcher.
   this host" in the status strip means `ui.svcOpen` is missing; `bun run
   probe --host <ip> -- --eval 'typeof ui.svcOpen'` confirms it, and only a
   reflash fixes it.
+- **`bun run push --host <ip>` wants a key named for that address.** Keys
+  live in `.pocket/devices/<ip>-8131.key` (git-ignored) and are planted into
+  the submodule before the tool runs. Discovery matches by device id and
+  usually finds any key for the console, but when the UDP reply is missed
+  the tool falls back to the address-named file and says "not paired" —
+  copy the console's key to `<current-ip>-8131.key`.
+- **The Info sheet counts requests.** `rows N · edits N · max pending N` and
+  the last error; `probe --eval 'JSON.stringify(__pocketVault.stats())'`
+  reads the same counters. A "64 requests already pending" there means some
+  path is issuing faster than the link answers; the pager itself is capped
+  at 8 in flight and 3 new per frame.
 - **The shots use their own vault.** The edit scene writes into a note, so
   `bun run shots` generates a 60-note corpus in a scratch directory instead
   of touching `vault/`.
