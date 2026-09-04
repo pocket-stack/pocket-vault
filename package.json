@@ -1,0 +1,25 @@
+{
+  "name": "pocket-vault",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pocket-stack/pocket-vault.git"
+  },
+  "scripts": {
+    "setup": "git submodule update --init && bun install --cwd vendor/pocketjs && bun scripts/setup.ts",
+    "corpus": "bun scripts/corpus.ts vault 1000 100",
+    "companion": "bun host/serve.ts",
+    "guest": "bun scripts/guest.ts",
+    "shots": "bun scripts/shots.ts",
+    "films": "bun scripts/films.ts",
+    "3ds": "bun scripts/3ds.ts",
+    "push": "bun scripts/push.ts",
+    "probe": "bun scripts/probe.ts",
+    "typecheck": "bun vendor/pocketjs/node_modules/typescript/bin/tsc --noEmit",
+    "test": "bun test --conditions=browser test/layout.test.ts test/vault.test.ts",
+    "check": "bun run typecheck && bun run test"
+  }
+}

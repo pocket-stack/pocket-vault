@@ -1,0 +1,50 @@
+{
+  "$schema": "https://pocketjs.dev/schema/pocket-2.json",
+  "pocket": 2,
+  "id": "dev.pocket-stack.vault-sim-stage",
+  "name": "pocketjs-vault-sim-stage",
+  "title": "Pocket Vault stage (sim)",
+  "version": "0.1.0",
+  "engine": {
+    "capabilities": {
+      "requires": [
+        "text.glyphs.baked",
+        "input.buttons",
+        "display.auxiliary",
+        "input.touch.auxiliary",
+        "svc.companion"
+      ],
+      "enhances": [
+        "input.analog.left"
+      ]
+    }
+  },
+  "app": {
+    "entry": "app/sim-stage.tsx",
+    "output": "pocketvault-stage",
+    "framework": "solid",
+    "companions": [
+      "vault"
+    ],
+    "surfaces": {
+      "auxiliary": {
+        "fixed": {
+          "logical": [
+            320,
+            240
+          ],
+          "presentation": "native"
+        }
+      }
+    },
+    "viewport": {
+      "fixed": {
+        "logical": [
+          400,
+          240
+        ],
+        "presentation": "native"
+      }
+    }
+  }
+}
