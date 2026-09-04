@@ -69,6 +69,9 @@ const REPEAT_DELAY = 18;
 const REPEAT_EVERY = 5;
 /** Rows a page-turn moves: one screen less a row of context. */
 const PAGE_PX = STAGE_H - 36;
+/** A page that was asked for and still has holes is asked again no sooner
+ *  than this many frames later. */
+const PAGE_RETRY_FRAMES = 30;
 
 interface EditOp {
   from: Pos;
@@ -213,6 +216,10 @@ export function createVaultStore(ops?: CompanionOps | null): VaultStore {
     return scroller.intent();
   };
 
+  const fail = (error: unknown): void => {
+    setError(error instanceof Error ? error.message : String(error));
+  };
+
   // ── editing state (declared early: the row pump consults it) ─────────────
   const [caret, setCaret] = createSignal<Caret | null>(null);
   const [anchor, setAnchor] = createSignal<Caret | null>(null);
@@ -239,6 +246,12 @@ export function createVaultStore(ops?: CompanionOps | null): VaultStore {
   // moment it is not. Requests carry the layout revision.
   const inflightPages = new Map<number, number>();
   let inflightRev = -1;
+  /** Frame at which each page was last asked for. A page whose reply did
+   *  not fill it (the note ended early, a revision raced) is asked again no
+   *  sooner than PAGE_RETRY_FRAMES later — never once per frame, which on a
+   *  slow link outruns the replies and hits the companion's pending cap. */
+  const pageAsked = new Map<number, number>();
+  let frameCount = 0;
   const pageMissing = (page: number, total: number): boolean => {
     const from = page * PAGE_ROWS;
     const to = Math.min(total, from + PAGE_ROWS);
@@ -248,12 +261,18 @@ export function createVaultStore(ops?: CompanionOps | null): VaultStore {
   const requestPage = (d: DocInfo, page: number): void => {
     const from = page * PAGE_ROWS;
     const rev = d.rev;
-    const id = mac.core.request("doc.rows", { id: d.id, from, count: PAGE_ROWS, rev }, (body) => {
+    pageAsked.set(page, frameCount);
+    let id: number;
+    try {
+      id = mac.core.request("doc.rows", { id: d.id, from, count: PAGE_ROWS, rev }, (body) => {
       inflightPages.delete(page);
       if (!("ok" in body)) return;
       const result = body.ok as RowsResult;
       const current = doc();
       if (!current || current.id !== d.id || result.rev !== current.rev) return;
+      // A reply that crossed a local edit would land off by the rows that
+      // edit gained or lost; the page is asked again once confirmed.
+      if (unconfirmed() > 0) return;
       result.rows.forEach((row, i) => {
         // The active line is the guest's while it is editing it.
         if (active !== null && localText !== null && row.l === active && rowCache.has(result.from + i)) return;
@@ -266,7 +285,13 @@ export function createVaultStore(ops?: CompanionOps | null): VaultStore {
         }
       }
       setRowsRev((n) => n + 1);
-    });
+      });
+    } catch (error) {
+      // The link's pending table is full: leave the page for a later frame
+      // rather than let a frame throw and take the guest down with it.
+      fail(error);
+      return;
+    }
     inflightPages.set(page, id);
   };
   createComputed(() => {
@@ -280,6 +305,7 @@ export function createVaultStore(ops?: CompanionOps | null): VaultStore {
     if (inflightRev !== d.rev) {
       for (const id of inflightPages.values()) mac.core.cancel(id);
       inflightPages.clear();
+      pageAsked.clear();
       inflightRev = d.rev;
     }
     const t = tops();
@@ -299,8 +325,14 @@ export function createVaultStore(ops?: CompanionOps | null): VaultStore {
         inflightPages.delete(page);
       }
     }
+    // While edits are unconfirmed the guest's row indices run ahead of the
+    // companion's; a page fetched now would land off by the rows the local
+    // line gained or lost. Pages resume once the patches have caught up.
+    if (unconfirmed() > 0) return;
     for (const page of wanted) {
       if (page < 0 || page > lastAll || inflightPages.has(page) || !pageMissing(page, d.rows)) continue;
+      const asked = pageAsked.get(page);
+      if (asked !== undefined && frameCount - asked < PAGE_RETRY_FRAMES) continue;
       requestPage(d, page);
     }
   });
@@ -429,10 +461,6 @@ export function createVaultStore(ops?: CompanionOps | null): VaultStore {
     // equals what the companion just sent.
     relayoutLocal();
     revealCaret();
-  };
-
-  const fail = (error: unknown): void => {
-    setError(error instanceof Error ? error.message : String(error));
   };
 
   const replayDeferred = (): void => {
@@ -636,6 +664,7 @@ export function createVaultStore(ops?: CompanionOps | null): VaultStore {
   const repeatable = BTN.UP | BTN.DOWN | BTN.LEFT | BTN.RIGHT;
 
   const frame = (buttons: number): void => {
+    frameCount += 1;
     scroller.step();
     const pressed = buttons & ~prevButtons;
     prevButtons = buttons;

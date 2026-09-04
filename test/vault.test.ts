@@ -16,6 +16,7 @@ import { K_RAW, ROW_H, rowTops } from "../app/protocol.ts";
 import { createVaultStore, type VaultStore } from "../app/store.ts";
 import { setRawMeasurer } from "../app/wrap.ts";
 import { createVaultService } from "../host/serve.ts";
+import { createCompanionHost } from "../vendor/pocketjs/tools/companion-host.ts";
 
 let dir = "";
 let service: ReturnType<typeof createVaultService>;
@@ -190,6 +191,42 @@ describe("Pocket Vault guest ↔ companion", () => {
       service.host.publish("vault.changed", { version: service.index.currentVersion() });
       await frames(store, pair, 3);
       expect(store.listTotal()).toBe(13);
+      dispose();
+    });
+  });
+});
+
+describe("row paging stays bounded", () => {
+  test("a page that never fills is asked again at most every PAGE_RETRY_FRAMES, not every frame", async () => {
+    // A companion whose rows reply is always empty: the worst case for the
+    // pager. On the console this once outran the replies on a slow link and
+    // hit the companion module's 64-pending cap inside a frame.
+    let rowsCalls = 0;
+    const hollow = createCompanionHost({
+      app: "vault",
+      name: "hollow",
+      methods: {
+        ...service.methods,
+        "doc.rows": (params: { from: number; rev: number }) => {
+          rowsCalls += 1;
+          return { from: params.from, rev: params.rev, rows: [] };
+        },
+      },
+    });
+    const pair = createSimCompanionPair(hollow);
+    await createRoot(async (dispose) => {
+      const store = createVaultStore(pair.ops);
+      await frames(store, pair, 2);
+      store.select(0);
+      await frames(store, pair, 2);
+      expect(store.doc()).not.toBeNull();
+      const before = rowsCalls;
+      await frames(store, pair, 120);
+      // Two seconds of frames, a handful of wanted pages, retries every 30
+      // frames: tens of requests, not hundreds — and nothing pending piles up.
+      expect(rowsCalls - before).toBeLessThan(40);
+      expect(store.mac.core.pendingCount()).toBeLessThan(8);
+      expect(store.lastError()).toBeNull();
       dispose();
     });
   });

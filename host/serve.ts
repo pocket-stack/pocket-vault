@@ -196,6 +196,8 @@ export function createVaultService(options: VaultServiceOptions) {
     host,
     index,
     metrics,
+    /** The method table, for tests that wrap a method. */
+    methods,
     /** Flush every dirty note. */
     flush(): void {
       for (const doc of open.values()) save(doc);
